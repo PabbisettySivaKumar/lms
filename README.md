@@ -23,7 +23,11 @@ A comprehensive web-based application for managing employee leaves, holidays, an
 
 ### 🛠 Admin Features
 *   **Holiday Import**: Bulk import holidays via CSV (supports various formats).
+
 *   **User Management**: create and manage employee accounts.
+*   **Yearly Leave Reset**: Automated job to reset casual/sick leaves and carry forward 50% earned leaves.
+    *   **Endpoint**: `POST /admin/yearly-reset`
+    *   **Logic**: CL/SL reset to 12.0. EL carries forward 50% (exact logic). Idempotent design.
 
 ## Tech Stack
 
