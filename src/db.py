@@ -10,6 +10,8 @@ DB_NAME = os.getenv("DB_NAME", "leave_management_db")
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 users_collection = db["users"]
+job_logs_collection = db["job_logs"]
+
 
 async def get_database():
     return db

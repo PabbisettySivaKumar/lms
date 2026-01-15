@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
-from src.db import db
+from src.db import db, job_logs_collection
 from src.models.leave import Holiday, HolidayCreate
 from src.models.user import UserRole
 from src.routes.auth import get_current_user_email, users_collection
@@ -67,6 +67,10 @@ async def list_holidays_admin(admin=Depends(verify_admin)):
 
 from bson import ObjectId
 
+from datetime import datetime
+from src.db import job_logs_collection, job_logs_collection # Need job_logs
+from src.models.job import JobLog
+
 @router.delete("/holidays/{holiday_id}")
 async def delete_holiday(holiday_id: str, admin=Depends(verify_admin)):
     if not ObjectId.is_valid(holiday_id):
@@ -77,6 +81,89 @@ async def delete_holiday(holiday_id: str, admin=Depends(verify_admin)):
         raise HTTPException(status_code=404, detail="Holiday not found")
         
     return {"message": "Deleted successfully"}
+
+@router.post("/yearly-reset")
+async def run_yearly_reset(current_user: dict = Depends(verify_admin)):
+    """
+    Resets leave balances for the new year.
+    - Casual/Sick Leave: Lapse and set to 12.0
+    - Earned Leave: Carry forward 50% of current balance (Exact decimal).
+    - Idempotent: Runs only once per year.
+    """
+    
+    # 1. Determine Job Name (YearlyReset_YYYY)
+    current_year = datetime.utcnow().year
+    next_year = current_year # If I run it in Jan 2026, it is reset FOR 2026.
+    
+    job_name = f"yearly_reset_{next_year}"
+    
+    # 2. Idempotency Check
+    existing_job = await job_logs_collection.find_one({"job_name": job_name, "status": "SUCCESS"})
+    if existing_job:
+        return {
+            "message": f"Job {job_name} has already been executed successfully.",
+            "executed_at": existing_job["executed_at"]
+        }
+        
+    # 3. Execution Logic
+    executed_at = datetime.utcnow()
+    logs = []
+    updated_count = 0
+    
+    try:
+        # Fetch all active users
+        async for user in users_collection.find({"is_active": True}):
+            old_el = user.get("earned_balance", 0.0)
+            
+            # Logic
+            new_cl = 12.0
+            new_sl = 12.0
+            new_el = old_el / 2.0 # Exact float division, no rounding
+            
+            # Update DB
+            await users_collection.update_one(
+                {"_id": user["_id"]},
+                {"$set": {
+                    "casual_balance": new_cl,
+                    "sick_balance": new_sl,
+                    "earned_balance": new_el
+                }}
+            )
+            
+            logs.append(f"User {user['email']}: EL {old_el} -> {new_el}")
+            updated_count += 1
+            
+        # 4. Success Log
+        job_log = JobLog(
+            job_name=job_name,
+            status="SUCCESS",
+            executed_at=executed_at,
+            executed_by=current_user["email"],
+            details={
+                "users_processed": updated_count,
+                "notes": "Reset CL/SL to 12. Halved EL.",
+                "sample_logs": logs[:50] # Store first 50 for audit
+            }
+        )
+        await job_logs_collection.insert_one(job_log.dict(by_alias=True))
+        
+        return {
+            "message": "Yearly reset completed successfully.",
+            "users_processed": updated_count,
+            "job_id": job_name
+        }
+        
+    except Exception as e:
+        # 5. Failure Log
+        job_log = JobLog(
+            job_name=job_name,
+            status="FAILED",
+            executed_at=executed_at,
+            executed_by=current_user["email"],
+            details={"error": str(e)}
+        )
+        await job_logs_collection.insert_one(job_log.dict(by_alias=True))
+        raise HTTPException(status_code=500, detail=f"Job failed: {str(e)}")
 
 @calendar_router.get("/holidays", response_model=List[Holiday])
 async def get_holidays():
