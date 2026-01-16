@@ -37,6 +37,8 @@ interface AuthState {
     login: (data: { email: string; password: string }) => Promise<void>;
     logout: () => void;
     fetchUser: () => Promise<void>;
+    forgotPassword: (email: string) => Promise<void>;
+    resetPassword: (token: string, newPassword: string) => Promise<void>;
 }
 
 interface LoginResponse {
@@ -83,6 +85,27 @@ export const useAuth = create<AuthState>((set, get) => ({
         } catch (error) {
             set({ user: null, isLoading: false });
             // Optional: logout if fetch fails (401 handled by axios)
+        }
+    },
+
+    forgotPassword: async (email: string) => {
+        set({ isLoading: true });
+        try {
+            await api.post('/auth/forgot-password', { email });
+        } finally {
+            set({ isLoading: false });
+        }
+    },
+
+    resetPassword: async (token: string, newPassword: string) => {
+        set({ isLoading: true });
+        try {
+            await api.post('/auth/reset-password', {
+                token,
+                new_password: newPassword
+            });
+        } finally {
+            set({ isLoading: false });
         }
     },
 }));

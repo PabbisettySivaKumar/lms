@@ -55,7 +55,7 @@ interface UserData {
 }
 
 interface ManagerData {
-    name: string;
+    full_name: string;
     employee_id: string;
     email: string;
 }
@@ -118,7 +118,7 @@ export default function AdminUsersPage() {
     const [searchTerm, setSearchTerm] = useState('');
 
     // Transform managers for select
-    const managerOptions = managers?.map(m => ({ id: m.employee_id, name: `${m.name} (${m.employee_id})` })) || [];
+    const managerOptions = managers?.map(m => ({ id: m.employee_id, name: `${m.full_name} (${m.employee_id})` })) || [];
 
     // Filtered Users
     const filteredUsers = users?.filter(u =>
@@ -157,9 +157,8 @@ export default function AdminUsersPage() {
                                 <TableHead>Name</TableHead>
                                 <TableHead>Role</TableHead>
                                 <TableHead>Manager</TableHead>
-                                <TableHead className="text-center">Casual Leave</TableHead>
+                                <TableHead className="text-center">Casual/Earned Leave</TableHead>
                                 <TableHead className="text-center">Sick Leave</TableHead>
-                                <TableHead className="text-center">Earned Leave</TableHead>
                                 <TableHead className="text-center">Comp Off</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -181,9 +180,8 @@ export default function AdminUsersPage() {
                                         </TableCell>
                                         <TableCell className="capitalize">{u.role}</TableCell>
                                         <TableCell className="whitespace-nowrap">{managerName}</TableCell>
-                                        <TableCell className="text-center">{u.casual_balance}</TableCell>
+                                        <TableCell className="text-center">{u.casual_balance + u.earned_balance}</TableCell>
                                         <TableCell className="text-center">{u.sick_balance}</TableCell>
-                                        <TableCell className="text-center">{u.earned_balance}</TableCell>
                                         <TableCell className="text-center">{u.comp_off_balance}</TableCell>
                                         <TableCell className="text-right">
                                             <DropdownMenu>

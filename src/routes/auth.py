@@ -54,6 +54,15 @@ async def get_current_user_email(token: str = Depends(oauth2_scheme)):
     except JWTError:
         raise credentials_exception
 
+from src.models.user import UserRole
+
+async def verify_admin(email: str = Depends(get_current_user_email)):
+    user = await users_collection.find_one({"email": email})
+    allowed_roles = [UserRole.ADMIN, UserRole.FOUNDER, UserRole.HR]
+    if not user or user["role"] not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Admin/HR access required")
+    return user
+
 
 @router.post("/login", response_model=LoginResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
@@ -116,11 +125,14 @@ async def forgot_password(request: ForgotPasswordRequest):
         }}
     )
     
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    reset_link = f"{frontend_url}/reset-password?token={token}"
+    
     # Send Email
     await send_email(
         to_email=request.email,
         subject="Reset Password",
-        body=f"Target: {request.email}\nYour reset token is: {token}\nExpires in 15 minutes."
+        body=f"Target: {request.email}\nYour reset token is: {token}\n\nClick here to reset your password:\n{reset_link}\n\nExpires in 15 minutes."
     )
     
     return {"message": "If the email exists, a reset link has been sent."}

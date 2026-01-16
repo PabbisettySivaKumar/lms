@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Depends
+import os
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from datetime import date, timedelta
 from typing import List, Union, Optional
 from bson import ObjectId
@@ -173,10 +174,55 @@ async def apply_leave(leave: LeaveRequestCreate, user: User = Depends(get_curren
     
     # NOTIFICATION
     if approver_email:
+        frontend_url = "http://localhost:3000" # Default or env 
+        # In a real app we'd get this from os.getenv("FRONTEND_URL")
+        
+        dates_str = f"{leave.start_date}"
+        if leave.end_date:
+             dates_str += f" to {leave.end_date}"
+        
+        # Leave Type Formatting
+        leave_type_map = {
+            "CASUAL": "Casual Leave",
+            "SICK": "Sick Leave",
+            "EARNED": "Earned Leave",
+            "WFH": "Work From Home",
+            "COMP_OFF": "Comp Off",
+            "MATERNITY": "Maternity Leave",
+            "SABBATICAL": "Sabbatical Leave"
+        }
+        formatted_type = leave_type_map.get(leave.type, leave.type)
+
+        email_body = f"""
+        <html>
+            <body>
+                <p>Hello,</p>
+                <p>This is to inform you that <strong>{user.full_name}</strong> has requested a <strong>{formatted_type}</strong> on the following date(s):<br>
+                {dates_str}</p>
+                
+                <p>They left the following remark:<br>
+                <em>{leave.reason or 'N/A'}</em></p>
+                
+                <p>To approve or reject these requests, please click the link below:</p>
+                
+                <p>
+                    <a href="{frontend_url}/dashboard/team" 
+                    style="color: #2563EB; text-decoration: underline; font-weight: bold;">
+                    Click here to view {user.full_name}'s request
+                    </a>
+                </p>
+
+                <p>Thanks,<br>
+                {user.full_name}</p>
+            </body>
+        </html>
+        """
+
         await send_email(
             to_email=approver_email, 
             subject=f"New Leave Request from {user.full_name}",
-            body=f"Type: {leave.type}\nDates: {leave.start_date} to {leave.end_date or 'Indefinite'}\nReason: {leave.reason}"
+            body=email_body,
+            subtype="html"
         )
         
     return {
@@ -225,9 +271,17 @@ async def claim_comp_off(claim: CompOffClaimCreate, user: User = Depends(get_cur
     return {"message": "Comp-off claim submitted", "id": str(res.inserted_id), "assigned_approver": approver_id}
 
 @router.patch("/action/{item_id}")
-async def action_leave(item_id: str, action: str, note: Optional[str] = None, approver: User = Depends(get_current_user)):
+async def action_leave(
+    item_id: str, 
+    action: str, # APPROVE or REJECT
+    note: str = None,
+    background_tasks: BackgroundTasks = None,
+    approver: User = Depends(get_current_user)
+):
     if action not in ["APPROVE", "REJECT"]:
         raise HTTPException(status_code=400, detail="Invalid action")
+        
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
     
     # Try finding in Leave Requests first
     item_type = "leave"
@@ -350,11 +404,48 @@ async def action_leave(item_id: str, action: str, note: Optional[str] = None, ap
     # NOTIFICATION
     applicant = await users_collection.find_one({"_id": ObjectId(applicant_id)})
     if applicant and applicant.get("email"):
-        await send_email(
-            to_email=applicant["email"],
-            subject=f"Request {action}D", # APPROVED / REJECTED
-            body=f"Your request has been {action}D by {approver.full_name}.\nNote: {note or 'None'}"
-        )
+        status_color = "#16a34a" if action == "APPROVE" else "#dc2626"
+        action_text = "APPROVED" if action == "APPROVE" else "REJECTED"
+        
+        email_body = f"""
+        <html>
+            <body>
+                <p>Hello {applicant['full_name']},</p>
+                <p>Your leave request has been <strong style="color: {status_color};">{action_text}</strong> by {approver.full_name}.</p>
+                
+                <p><strong>Manager's Note:</strong><br>
+                <em>{note or 'None'}</em></p>
+                
+                <p>You can view your leave status at:</p>
+                <p>
+                    <a href="{frontend_url}/dashboard/my-leaves" 
+                    style="color: #2563EB; text-decoration: underline; font-weight: bold;">
+                    View My Leaves
+                    </a>
+                </p>
+                
+                <p>Thanks,<br>
+                LMS Team</p>
+            </body>
+        </html>
+        """
+
+        if background_tasks:
+            background_tasks.add_task(
+                send_email,
+                to_email=applicant["email"],
+                subject=f"Leave Request {action_text}", 
+                body=email_body,
+                subtype="html"
+            )
+        else:
+            # Fallback for sync testing
+            await send_email(
+                to_email=applicant["email"],
+                subject=f"Leave Request {action_text}", 
+                body=email_body,
+                subtype="html"
+            )
 
     return {"message": f"Request {new_status}"}
 

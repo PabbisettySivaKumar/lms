@@ -7,7 +7,8 @@ from bson import ObjectId
 from src.db import db
 from src.models.policy import Policy, PolicyCreate, PolicyAcknowledgment
 from src.models.user import User, UserRole
-from src.routes.users import get_current_user, verify_admin
+from src.routes.users import get_current_user
+from src.routes.auth import verify_admin
 
 router = APIRouter(prefix="/policies", tags=["Policies"])
 

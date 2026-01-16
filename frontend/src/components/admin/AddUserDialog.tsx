@@ -42,8 +42,8 @@ const addUserSchema = z.object({
     employee_id: z.string().min(1, 'Employee ID is required'),
     role: z.string(),
     manager_id: z.string().optional(),
-    joining_date: z.date({ required_error: 'Joining date is required' }),
-    password: z.string().min(1, 'Password is required'), // Adding password field since POST /admin/users usually needs it or generates it. 
+    joining_date: z.date(),
+    password: z.string().min(6, 'Password must be at least 6 characters'),
     // Wait, previous instructions for POST /admin/users might accept a default. 
     // Let's assume we need to set a default password or input one.
     // I'll add a default "welcome123" logic or input. Let's add an input for safety.

@@ -14,6 +14,8 @@ from src.services.scheduler import start_scheduler, shutdown_scheduler
 async def lifespan(app: FastAPI):
     # Startup
     start_scheduler()
+    from src.db import create_indexes
+    await create_indexes()
     yield
     # Shutdown
     shutdown_scheduler()

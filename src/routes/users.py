@@ -4,7 +4,7 @@ from datetime import datetime
 from src.db import users_collection
 from src.models.user import User, UserCreateAdmin, UserRole
 from src.utils.security import get_password_hash
-from src.routes.auth import get_current_user_email
+from src.routes.auth import get_current_user_email, verify_admin
 
 router = APIRouter(prefix="", tags=["Users"])
 
@@ -18,12 +18,7 @@ async def get_current_user(email: str = Depends(get_current_user_email)):
     user["_id"] = str(user["_id"])
     return User(**user)
 
-async def verify_admin(email: str = Depends(get_current_user_email)):
-    user = await users_collection.find_one({"email": email})
-    allowed_roles = [UserRole.ADMIN, UserRole.FOUNDER, UserRole.HR]
-    if not user or user["role"] not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
+
 
 @router.get("/users/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
@@ -71,8 +66,10 @@ async def create_user_admin(user_in: UserCreateAdmin, admin=Depends(verify_admin
             raise HTTPException(status_code=400, detail=f"Manager with ID {user_in.manager_id} not found")
         manager_name = manager["full_name"]
     
-    # Default Password
-    hashed_password = get_password_hash("Welcome@2026")
+    # Password Handling
+    if len(user_in.password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    hashed_password = get_password_hash(user_in.password)
     
     user_dict = user_in.dict()
     user_dict.update({

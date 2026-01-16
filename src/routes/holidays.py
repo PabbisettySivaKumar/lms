@@ -1,21 +1,17 @@
 from fastapi import APIRouter, HTTPException, Depends
+from pymongo import UpdateOne
 from typing import List
 from src.db import db, job_logs_collection
 from src.models.leave import Holiday, HolidayCreate
 from src.models.user import UserRole
-from src.routes.auth import get_current_user_email, users_collection
+from src.routes.auth import get_current_user_email, verify_admin, users_collection
 
 router = APIRouter(prefix="/admin", tags=["Holidays"])
 calendar_router = APIRouter(prefix="/calendar", tags=["Calendar"])
 
 holidays_collection = db["holidays"]
 
-async def verify_admin(email: str = Depends(get_current_user_email)):
-    user = await users_collection.find_one({"email": email})
-    allowed_roles = [UserRole.ADMIN, UserRole.FOUNDER, UserRole.HR]
-    if not user or user["role"] not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Admin/HR access required")
-    return user
+
 
 @router.post("/holidays/bulk", response_model=dict)
 async def bulk_create_holidays(holidays: List[HolidayCreate], admin=Depends(verify_admin)):
@@ -108,6 +104,7 @@ async def run_yearly_reset(current_user: dict = Depends(verify_admin)):
     # 3. Execution Logic
     executed_at = datetime.utcnow()
     logs = []
+    operations = []
     updated_count = 0
     
     try:
@@ -120,18 +117,24 @@ async def run_yearly_reset(current_user: dict = Depends(verify_admin)):
             new_sl = 12.0
             new_el = old_el / 2.0 # Exact float division, no rounding
             
-            # Update DB
-            await users_collection.update_one(
-                {"_id": user["_id"]},
-                {"$set": {
-                    "casual_balance": new_cl,
-                    "sick_balance": new_sl,
-                    "earned_balance": new_el
-                }}
+            # Prepare Bulk Operation
+            operations.append(
+                UpdateOne(
+                    {"_id": user["_id"]},
+                    {"$set": {
+                        "casual_balance": new_cl,
+                        "sick_balance": new_sl,
+                        "earned_balance": new_el
+                    }}
+                )
             )
             
             logs.append(f"User {user['email']}: EL {old_el} -> {new_el}")
             updated_count += 1
+            
+        # Execute Bulk Write
+        if operations:
+            await users_collection.bulk_write(operations)
             
         # 4. Success Log
         job_log = JobLog(

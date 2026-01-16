@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Optional
 from datetime import date, datetime
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, validator
 
 class UserRole(str, Enum):
     EMPLOYEE = "employee"
@@ -51,6 +51,10 @@ class UserBase(BaseModel):
     password_reset_token: Optional[str] = None
     password_reset_expiry: Optional[datetime] = None
 
+    @validator('full_name', check_fields=False)
+    def name_must_be_title_case(cls, v):
+        return v.title()
+
 class UserBalanceUpdate(BaseModel):
     casual_balance: Optional[float] = None
     sick_balance: Optional[float] = None
@@ -86,6 +90,11 @@ class UserCreateAdmin(BaseModel):
     role: UserRole = UserRole.EMPLOYEE
     joining_date: Optional[date] = None
     manager_id: Optional[str] = None
+    password: str
+
+    @validator('full_name', check_fields=False)
+    def name_must_be_title_case(cls, v):
+        return v.title()
 
 class UserCreate(UserBase):
     password: str

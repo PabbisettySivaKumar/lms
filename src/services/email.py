@@ -16,7 +16,7 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=True
 )
 
-async def send_email(to_email: str, subject: str, body: str):
+async def send_email(to_email: str, subject: str, body: str, subtype: str = "plain"):
     """
     Send an email using FastAPI Mail (Office 365)
     """
@@ -25,7 +25,7 @@ async def send_email(to_email: str, subject: str, body: str):
             subject=subject,
             recipients=[to_email],
             body=body,
-            subtype=MessageType.plain
+            subtype=subtype
         )
         
         fm = FastMail(conf)
