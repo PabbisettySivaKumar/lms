@@ -3,7 +3,7 @@ import shutil
 import os
 from pathlib import Path
 from src.db import db
-from src.models.policy import LeavePolicy
+from src.models.policy import LeavePolicy, PolicyDocument
 from src.routes.users import get_current_user
 from src.models.user import User, UserRole
 from typing import List
@@ -75,6 +75,7 @@ async def create_or_update_policy(policy_data: LeavePolicy, current_user: User =
 @router.post("/{year}/document", response_model=LeavePolicy)
 async def upload_policy_document(
     year: int, 
+    name: str = None,
     file: UploadFile = File(...), 
     current_user: User = Depends(verify_admin)
 ):
@@ -89,7 +90,7 @@ async def upload_policy_document(
     UPLOAD_DIR = Path("static/uploads/policies")
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     
-    filename = f"{year}_policy.pdf"
+    filename = f"{year}_{int(datetime.now().timestamp())}_{file.filename.replace(' ', '_')}"
     file_path = UPLOAD_DIR / filename
     
     try:
@@ -99,11 +100,58 @@ async def upload_policy_document(
         file.file.close()
         
     document_url = f"/static/uploads/policies/{filename}"
+    doc_display_name = name if name else file.filename
+    new_doc = PolicyDocument(
+        name=doc_display_name,
+        url=document_url,
+        uploaded_at=datetime.utcnow()
+    )
     
     await policies_collection.update_one(
         {"year": year},
-        {"$set": {"document_url": document_url}}
+        {
+            "$push": {"documents": new_doc.dict()},
+            "$set": {
+                # Update legacy fields to the LATEST uploaded document for compatibility
+                "document_url": document_url, 
+                "document_name": doc_display_name
+            }
+        }
     )
+    
+    updated = await policies_collection.find_one({"year": year})
+    updated["_id"] = str(updated["_id"])
+    return LeavePolicy(**updated)
+
+@router.delete("/{year}/document", response_model=LeavePolicy)
+async def delete_policy_document(
+    year: int, 
+    url: str,
+    current_user: User = Depends(verify_admin)
+):
+    # Check if policy exists
+    policy = await policies_collection.find_one({"year": year})
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+        
+    # Remove from disk
+    # Extract filename from URL
+    # URL: /static/uploads/policies/filename
+    if "/static/uploads/policies/" in url:
+        filename = url.split("/static/uploads/policies/")[1]
+        file_path = Path("static/uploads/policies") / filename
+        if file_path.exists():
+            os.remove(file_path)
+    
+    # Remove from DB
+    await policies_collection.update_one(
+        {"year": year},
+        {"$pull": {"documents": {"url": url}}}
+    )
+    
+    # Check if legacy fields need clearing if this was the last one?
+    # Or if the deleted one matched the legacy one.
+    # For now, let's keep it simple. If documents list becomes empty, we could clear legacy.
     
     updated = await policies_collection.find_one({"year": year})
     updated["_id"] = str(updated["_id"])

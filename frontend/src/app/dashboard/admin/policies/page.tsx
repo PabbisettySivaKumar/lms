@@ -25,6 +25,12 @@ interface LeavePolicy {
     is_active: boolean;
     _id?: string;
     document_url?: string;
+    document_name?: string;
+    documents?: Array<{
+        name: string;
+        url: string;
+        uploaded_at: string;
+    }>;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -42,6 +48,7 @@ export default function PoliciesPage() {
     const [wfhQuota, setWfhQuota] = useState<number>(2);
 
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [docName, setDocName] = useState<string>('');
 
     useEffect(() => {
         fetchPolicies();
@@ -110,7 +117,10 @@ export default function PoliciesPage() {
             const formData = new FormData();
             formData.append('file', selectedFile);
 
-            const res = await fetch(`${API_URL}/policies/${year}/document`, {
+            const url = new URL(`${API_URL}/policies/${year}/document`);
+            if (docName) url.searchParams.append('name', docName);
+
+            const res = await fetch(url.toString(), {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -129,10 +139,34 @@ export default function PoliciesPage() {
             toast.success("Document uploaded successfully");
             await fetchPolicies();
             setSelectedFile(null);
+            setDocName('');
         } catch (error: any) {
             toast.error(error.message || "Failed to upload document");
         } finally {
             setIsUploading(false);
+        }
+    };
+
+    const handleDeleteDocument = async (policyYear: number, docUrl: string) => {
+        if (!confirm("Are you sure you want to delete this document?")) return;
+
+        try {
+            const token = localStorage.getItem('access_token');
+            const res = await fetch(`${API_URL}/policies/${policyYear}/document?url=${encodeURIComponent(docUrl)}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (!res.ok) {
+                throw new Error("Failed to delete document");
+            }
+
+            toast.success("Document deleted");
+            await fetchPolicies();
+        } catch (error: any) {
+            toast.error(error.message || "Failed to delete document");
         }
     };
 
@@ -245,6 +279,16 @@ export default function PoliciesPage() {
                                     <p className="text-xs text-blue-600">Selected: {selectedFile.name}</p>
                                 )}
                             </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="doc-name">Document Label (e.g. Leave Policy)</Label>
+                                <Input
+                                    id="doc-name"
+                                    type="text"
+                                    placeholder="Leave Policy / Holiday List..."
+                                    value={docName}
+                                    onChange={(e) => setDocName(e.target.value)}
+                                />
+                            </div>
                             <Button
                                 onClick={handleUploadDocument}
                                 disabled={isUploading || !selectedFile}
@@ -261,9 +305,10 @@ export default function PoliciesPage() {
 
                 {/* Right Column: Existing Policies */}
                 <div className="space-y-6">
-                    <Card className="h-full">
+                    {/* Card 3: Leave Quotas History */}
+                    <Card>
                         <CardHeader>
-                            <CardTitle>Existing Policies</CardTitle>
+                            <CardTitle>Leave Quotas</CardTitle>
                         </CardHeader>
                         <CardContent>
                             {isLoading ? (
@@ -275,8 +320,7 @@ export default function PoliciesPage() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Year</TableHead>
-                                            <TableHead>CL/SL/WFH</TableHead>
-                                            <TableHead>Doc</TableHead>
+                                            <TableHead>CL / SL / WFH</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -297,20 +341,79 @@ export default function PoliciesPage() {
                                                         <span className="font-semibold"> {policy.wfh_quota}</span> WFH
                                                     </div>
                                                 </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    {/* Card 4: Document Policies History */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Policy Documents</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            {isLoading ? (
+                                <div className="flex justify-center p-4"><Loader2 className="animate-spin" /></div>
+                            ) : policies.length === 0 ? (
+                                <p className="text-center text-slate-500 py-4">No policies found.</p>
+                            ) : (
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Year</TableHead>
+                                            <TableHead>Documents</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {policies.map((policy) => (
+                                            <TableRow key={`doc-${policy._id}`}>
+                                                <TableCell className="font-medium align-top">
+                                                    {policy.year}
+                                                </TableCell>
                                                 <TableCell className="align-top">
-                                                    {policy.document_url ? (
-                                                        <a
-                                                            href={`${API_URL}${policy.document_url}`}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            className="inline-flex items-center text-blue-600 hover:underline text-sm"
-                                                        >
-                                                            <FileText className="w-3 h-3 mr-1" />
-                                                            PDF
-                                                        </a>
-                                                    ) : (
-                                                        <span className="text-slate-400 text-xs italic">Pending</span>
-                                                    )}
+                                                    <div className="space-y-2">
+                                                        {policy.documents && policy.documents.length > 0 ? (
+                                                            policy.documents.map((doc, idx) => (
+                                                                <div key={idx} className="flex items-center justify-between group">
+                                                                    <a
+                                                                        href={`${API_URL}${doc.url}`}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        className="inline-flex items-center text-blue-600 hover:underline text-sm"
+                                                                    >
+                                                                        <FileText className="w-4 h-4 mr-2" />
+                                                                        {doc.name}
+                                                                    </a>
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="sm"
+                                                                        onClick={() => handleDeleteDocument(policy.year, doc.url)}
+                                                                        className="h-6 px-2 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                    >
+                                                                        Delete
+                                                                    </Button>
+                                                                </div>
+                                                            ))
+                                                        ) : policy.document_url ? (
+                                                            // Fallback for legacy items not yet migrated to documents list
+                                                            <div className="flex items-center justify-between group">
+                                                                <a
+                                                                    href={`${API_URL}${policy.document_url}`}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="inline-flex items-center text-blue-600 hover:underline text-sm"
+                                                                >
+                                                                    <FileText className="w-4 h-4 mr-2" />
+                                                                    {policy.document_name || "Official Policy"}
+                                                                </a>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-slate-400 text-xs italic">No documents uploaded</span>
+                                                        )}
+                                                    </div>
                                                 </TableCell>
                                             </TableRow>
                                         ))}
