@@ -86,43 +86,32 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
         Papa.parse<any>(file, {
             header: true,
             skipEmptyLines: true,
-            transformHeader: (header) => header.toLowerCase().trim(), // Normalize headers
+            transformHeader: (header) => header.toLowerCase().trim(),
             complete: (results) => {
                 try {
                     const validData: ParsedHoliday[] = [];
                     const errors: string[] = [];
+                    const processedDates = new Set<string>(); // Deduplication
 
                     results.data.forEach((row, index) => {
                         const keys = Object.keys(row);
-
-                        // Map flexible column names
-                        // We look for keys that *contain* our target words (case insensitive is handled by transformHeader)
-                        // transformed header matches: 's.no', 'date', 'day', 'holiday'
 
                         let dateVal = row.date || row.Date || row['date'] || null;
                         let nameVal = row.name || row.Name || row.holiday || row['holiday'] || row['event name'] || null;
                         let optionalVal = row.optional || row.Optional || row.is_optional || 'false';
 
-                        // Specific handling for the User's provided format: "S.No, Date, Day, Holiday"
                         if (!dateVal && keys.includes('date')) dateVal = row['date'];
                         if (!nameVal && keys.includes('holiday')) nameVal = row['holiday'];
 
-
-                        // Fallback: Handle single column issue (e.g. "date,name" in one cell)
+                        // Fallback logic for weird CSV mapping (same as before)
                         if (!dateVal && !nameVal && keys.length === 1) {
                             const singleKey = keys[0];
                             const singleValue = row[singleKey];
-
-                            // Check if the key itself looks like a combined header "date,name"
-                            // or if we just have a single value that needs splitting
                             if (typeof singleValue === 'string' && singleValue.includes(',')) {
                                 const parts = singleValue.split(',');
-                                // Assume order: date, name, optional OR s.no, date, day, holiday
-                                // If 4 parts, likely User's format: 1, 14 Jan 2026, Wednesday, Makara Sankranti
                                 if (parts.length >= 4) {
                                     dateVal = parts[1]?.trim();
                                     nameVal = parts[3]?.trim();
-                                    // part 0 is s.no, part 2 is day
                                 } else {
                                     dateVal = parts[0]?.trim();
                                     nameVal = parts[1]?.trim();
@@ -131,56 +120,77 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
                             }
                         }
 
-                        // Basic Validation
                         if (!dateVal || !nameVal) {
-                            // Only report if row is not completely empty (papaparse handles skipEmptyLines strictly, but sometimes whitespace remains)
                             const values = Object.values(row).join('').trim();
                             if (values.length > 0) {
-                                errors.push(`Row ${index + 2}: Missing Date or Name/Holiday`);
+                                errors.push(`Row ${index + 2}: Missing Date or Name`);
                             }
                             return;
                         }
 
-                        // Sanitize inputs (handle newlines from messy excel copy-paste)
+                        // Sanitize
                         let cleanDate = dateVal.toString().replace(/\n/g, ' ').trim();
+                        // Normalize month casing (e.g., "jan" -> "Jan") just in case
+                        // cleanDate = cleanDate.charAt(0).toUpperCase() + cleanDate.slice(1); 
+                        // Actually hard to blindly titlecase if it starts with number. Let parse handle it.
+
                         const cleanName = nameVal.toString().replace(/\n/g, ' ').trim();
 
-                        // Date Parsing Logic
-                        // Supports: YYYY-MM-DD, DD-MM-YYYY, DD MMM YYYY (e.g., 14 Jan 2026)
                         let parsedDateStr = '';
 
-                        // Try Standard ISO YYYY-MM-DD
+                        // 1. Try ISO
                         if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
                             parsedDateStr = cleanDate;
-                        }
-                        // Try "14 Jan 2026" or "14-Jan-2026"
-                        else {
+                        } else {
                             try {
                                 const { parse, format: formatDate } = require('date-fns');
-                                // Try common formats
-                                const formatsToTry = ['d MMM yyyy', 'dd MMM yyyy', 'dd-MMM-yyyy', 'd-MMM-yyyy', 'yyyy/MM/dd', 'dd/MM/yyyy'];
+                                // Added support for "Jan 14th 26", "Jan 14 26", etc.
+                                const formatsToTry = [
+                                    'd MMM yyyy', 'dd MMM yyyy', 'dd-MMM-yyyy', 'd-MMM-yyyy',
+                                    'dd-MMM-yy', 'd-MMM-yy', // Support 14-Jan-26
+                                    'd MMM yy', 'dd MMM yy', // Support 14 Jan 26
+                                    'yyyy/MM/dd', 'dd/MM/yyyy',
+                                    'MMM do yy', 'MMM do yyyy', 'MMM d yy', 'MMM d yyyy',
+                                    'do MMM yy', 'do MMM yyyy'
+                                ];
                                 let validDate = null;
 
                                 for (const fmt of formatsToTry) {
+                                    // Handle cases where the year might be 2 digits (yy) -> 1926 or 2026? 
+                                    // date-fns maps 0-68 to 2000-2068 by default usually, but we need caution.
+
+                                    // Pre-processing for "Jan 14th 26" -> remove "th", "st", "nd", "rd" if pattern doesn't catch it?
+                                    // actually 'do' pattern catches it.
+
                                     const d = parse(cleanDate, fmt, new Date());
                                     if (!isNaN(d.getTime())) {
-                                        validDate = d;
-                                        break;
+                                        // Sanity check year
+                                        const y = d.getFullYear();
+                                        if (y > 1900 && y < 2100) {
+                                            validDate = d;
+                                            break;
+                                        }
                                     }
                                 }
 
                                 if (validDate) {
                                     parsedDateStr = formatDate(validDate, 'yyyy-MM-dd');
                                 }
-                            } catch (e) {
-                                // console.error(e);
-                            }
+                            } catch (e) { }
                         }
 
                         if (!parsedDateStr) {
-                            errors.push(`Row ${index + 2}: Invalid date format '${cleanDate}'. Supported: YYYY-MM-DD, 14 Jan 2026`);
+                            errors.push(`Row ${index + 2}: Invalid date '${cleanDate}'`);
                             return;
                         }
+
+                        // Deduplication: Check if we already processed this date in this batch
+                        if (processedDates.has(parsedDateStr)) {
+                            // Skip silently or log? User asked to fix redundancies. 
+                            // Skipping ensures unique dates.
+                            return;
+                        }
+                        processedDates.add(parsedDateStr);
 
                         const yearVal = parseInt(parsedDateStr.split('-')[0]);
 
@@ -193,14 +203,18 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
                     });
 
                     if (errors.length > 0) {
-                        setError(`Found ${errors.length} errors. First error: ${errors[0]}`);
+                        setError(`Found ${errors.length} errors. First: ${errors[0]}`);
                     } else if (validData.length === 0) {
-                        setError("No valid records found in file.");
+                        setError("No valid records found.");
                     } else {
                         setParsedData(validData);
+                        if (processedDates.size < results.data.length) {
+                            // Maybe hint that some were ignored?
+                            // toast.info(`Ignored ${results.data.length - processedDates.size} duplicate entries.`);
+                        }
                     }
                 } catch (err) {
-                    setError("Failed to parse CSV file.");
+                    setError("Failed to parse CSV.");
                 } finally {
                     setIsParsing(false);
                 }
@@ -234,8 +248,6 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
             if (typeof detail === 'string') {
                 errorMessage = detail;
             } else if (Array.isArray(detail)) {
-                // Handle Pydantic validation errors (array of objects)
-                // e.g. [{loc:..., msg:..., type:...}]
                 errorMessage = detail.map((err: any) => err.msg).join(', ');
             } else if (typeof detail === 'object' && detail !== null) {
                 errorMessage = JSON.stringify(detail);

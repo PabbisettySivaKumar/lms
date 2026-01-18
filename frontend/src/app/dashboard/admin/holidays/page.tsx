@@ -53,7 +53,7 @@ export default function AdminHolidaysPage() {
         queryKey: ['holidays'],
         queryFn: async () => {
             try {
-                const res = await api.get<any[]>('/admin/holidays');
+                const res = await api.get<any[]>('/calendar/holidays');
                 console.log('Fetched Holidays:', res.data);
                 return res.data.map((h: any) => ({
                     ...h,
@@ -87,6 +87,17 @@ export default function AdminHolidaysPage() {
         }
     }
 
+    const handleYearlyReset = async () => {
+        if (confirm('⚠️ WARNING: This will RESET all employee leave balances (CL=0, SL=Quota, EL=50% Carry). Are you sure?')) {
+            try {
+                await api.post('/admin/yearly-reset');
+                toast.success('Yearly leave reset completed successfully.');
+            } catch (error: any) {
+                toast.error(error.response?.data?.message || 'Failed to reset leaves.');
+            }
+        }
+    }
+
     if (isLoading || holidaysLoading) return <div className="p-8">Loading holidays...</div>;
 
     return (
@@ -94,6 +105,9 @@ export default function AdminHolidaysPage() {
             <div className="flex items-center justify-between">
                 <h1 className="text-3xl font-bold tracking-tight">Holiday Planner</h1>
                 <div className="flex gap-2">
+                    <Button variant="destructive" onClick={handleYearlyReset}>
+                        ⚠️ Reset Leaves (Manual)
+                    </Button>
                     <Button variant="outline" onClick={() => setIsImportOpen(true)}>
                         <Upload className="mr-2 h-4 w-4" /> Import CSV
                     </Button>

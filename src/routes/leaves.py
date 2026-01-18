@@ -139,6 +139,9 @@ async def apply_leave(leave: LeaveRequestCreate, user: User = Depends(get_curren
         elif leave.type == LeaveType.EARNED:
             if user.earned_balance < deductible_days:
                 raise HTTPException(status_code=400, detail="Insufficient Earned Leave balance")
+        elif leave.type == LeaveType.WFH:
+            if user.wfh_balance < deductible_days:
+                raise HTTPException(status_code=400, detail="Insufficient Work From Home balance")
     
     # Maternity / Sabbatical = 0 deductible (or handled purely as status without balance)
     # User said "Ensure maternity does not deduct from standard CL/SL".
@@ -262,10 +265,34 @@ async def claim_comp_off(claim: CompOffClaimCreate, user: User = Depends(get_cur
     
     # NOTIFICATION
     if approver_email:
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        approval_link = f"{frontend_url}/dashboard/approvals" # Adjust path if needed
+        
+        email_body = f"""
+        <html>
+            <body>
+                <p>Hello,</p>
+                <p>This is to inform you that <strong>{user.full_name}</strong> has requested a <strong>Comp Off</strong> on the following date(s):<br>
+                {claim.work_date}</p>
+                
+                <p>They left the following remark:<br>
+                {claim.reason}</p>
+                
+                <p>To approve or reject these requests, please click the link below:</p>
+                
+                <p><a href="{approval_link}">Click here to view {user.full_name}'s request</a></p>
+                
+                <p>Thanks,<br>
+                {user.full_name}</p>
+            </body>
+        </html>
+        """
+        
         await send_email(
             to_email=approver_email,
             subject=f"New Comp-Off Claim from {user.full_name}",
-            body=f"Work Date: {claim.work_date}\nReason: {claim.reason}"
+            body=email_body,
+            subtype="html"
         )
     
     return {"message": "Comp-off claim submitted", "id": str(res.inserted_id), "assigned_approver": approver_id}
@@ -348,6 +375,8 @@ async def action_leave(
                 update_field = "sick_balance"
             elif leave_type == LeaveType.EARNED:
                 update_field = "earned_balance"
+            elif leave_type == LeaveType.WFH:
+                update_field = "wfh_balance"
                 
             if update_field:
                 if applicant.get(update_field, 0.0) < deductible:
@@ -373,6 +402,8 @@ async def action_leave(
                 update_field = "sick_balance"
             elif leave_type == LeaveType.EARNED:
                 update_field = "earned_balance"
+            elif leave_type == LeaveType.WFH:
+                update_field = "wfh_balance"
             
             if update_field:
                 await users_collection.update_one(
@@ -418,14 +449,11 @@ async def action_leave(
                 
                 <p>You can view your leave status at:</p>
                 <p>
-                    <a href="{frontend_url}/dashboard/my-leaves" 
-                    style="color: #2563EB; text-decoration: underline; font-weight: bold;">
-                    View My Leaves
-                    </a>
+                    <a href="{frontend_url}/dashboard/employee/leaves" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">View My Requests</a>
                 </p>
                 
                 <p>Thanks,<br>
-                LMS Team</p>
+                {approver.full_name}</p>
             </body>
         </html>
         """
@@ -495,6 +523,8 @@ async def cancel_leave(leave_id: str, user: User = Depends(get_current_user)):
             update_field = "sick_balance"
         elif leave_type == LeaveType.EARNED:
             update_field = "earned_balance"
+        elif leave_type == LeaveType.WFH:
+            update_field = "wfh_balance"
         
         # Only refund if it was a deductible type (Maternity/Sabbatical are 0 anyway)
         if update_field and deductible > 0:

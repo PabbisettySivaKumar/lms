@@ -38,7 +38,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 
 const applySchema = z.object({
-  type: z.enum(['CASUAL', 'SICK', 'EARNED', 'COMP_OFF', 'MATERNITY', 'SABBATICAL']),
+  type: z.enum(['CASUAL', 'SICK', 'EARNED', 'COMP_OFF', 'MATERNITY', 'SABBATICAL', 'WFH']),
   reason: z.string().min(1, 'Reason is required'),
 });
 
@@ -237,6 +237,7 @@ export function ApplyLeaveDialog({
                 <SelectItem value="CASUAL">Casual Leave</SelectItem>
                 <SelectItem value="SICK">Sick Leave</SelectItem>
                 <SelectItem value="EARNED">Earned Leave</SelectItem>
+                <SelectItem value="WFH">Work From Home</SelectItem>
                 <SelectItem value="COMP_OFF">Comp-Off</SelectItem>
                 <SelectItem value="MATERNITY">Maternity Leave</SelectItem>
                 <SelectItem value="SABBATICAL">Sabbatical Leave</SelectItem>

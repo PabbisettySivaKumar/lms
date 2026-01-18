@@ -46,10 +46,15 @@ export default function LoginPage() {
     const onSubmit = async (data: LoginSchema) => {
         setLoading(true);
         try {
-            await login({ email: data.email, password: data.password });
+            const resetRequired = await login({ email: data.email, password: data.password });
 
             toast.success('Welcome back!');
-            router.push('/dashboard');
+
+            if (resetRequired) {
+                router.push('/force-reset');
+            } else {
+                router.push('/dashboard');
+            }
         } catch (error: any) {
             console.error(error);
             const msg = error.response?.data?.detail || 'Invalid email or password';

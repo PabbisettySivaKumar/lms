@@ -1,27 +1,15 @@
 from pydantic import BaseModel, Field
-from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
-class PolicyBase(BaseModel):
-    title: str
-    description: Optional[str] = None
-
-class PolicyCreate(PolicyBase):
-    pass
-
-class Policy(PolicyBase):
-    id: str = Field(..., alias="_id")
-    file_url: str
-    created_at: datetime
+class LeavePolicy(BaseModel):
+    year: int = Field(..., description="Year for which the policy is active")
+    casual_leave_quota: int = 12
+    sick_leave_quota: int = 5
+    wfh_quota: int = 2
+    is_active: bool = False
+    document_url: Optional[str] = None
     
-    # User specific field (not stored in policies coll, but returned in API)
-    is_acknowledged: bool = False
-    acknowledged_at: Optional[datetime] = None
+    id: Optional[str] = Field(None, alias="_id")
 
     class Config:
         populate_by_name = True
-
-class PolicyAcknowledgment(BaseModel):
-    user_id: str
-    policy_id: str
-    acknowledged_at: datetime

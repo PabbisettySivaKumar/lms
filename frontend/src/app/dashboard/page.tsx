@@ -8,7 +8,7 @@ import { format, parseISO } from 'date-fns';
 import api from '@/lib/axios';
 
 import { useState } from 'react';
-import { Plus, Clock } from 'lucide-react';
+import { Plus, Clock, UserCircle, Laptop } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ClaimCompOffDialog } from '@/components/dashboard/ClaimCompOffDialog';
 
@@ -73,34 +73,60 @@ export default function DashboardPage() {
       />
 
       {/* Section 1: Balances */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Casual Leave</CardTitle>
+      <div className="grid gap-6 md:grid-cols-4">
+        {/* Casual Leave - Teal Gradient */}
+        <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/10 shadow-sm transition-all hover:shadow-md">
+          <div className="absolute top-0 right-0 p-4 opacity-10">
+            <UserCircle className="h-24 w-24 text-teal-600" />
+          </div>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 z-10">
+            <CardTitle className="text-sm font-semibold text-teal-700 dark:text-teal-300">Casual Leave</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{user.casual_balance}</div>
-            <p className="text-xs text-slate-500">Available days</p>
+          <CardContent className="z-10">
+            <div className="text-4xl font-bold text-teal-900 dark:text-teal-100">{user.casual_balance}</div>
+            <p className="text-xs font-medium text-teal-600/80 dark:text-teal-400 mt-1">Available days</p>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Sick Leave</CardTitle>
+        {/* Sick Leave - Blue Gradient */}
+        <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-900/10 shadow-sm transition-all hover:shadow-md">
+          <div className="absolute top-0 right-0 p-4 opacity-10">
+            <Plus className="h-24 w-24 text-blue-600" />
+          </div>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 z-10">
+            <CardTitle className="text-sm font-semibold text-blue-700 dark:text-blue-300">Sick Leave</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{user.sick_balance}</div>
-            <p className="text-xs text-slate-500">Available days</p>
+          <CardContent className="z-10">
+            <div className="text-4xl font-bold text-blue-900 dark:text-blue-100">{user.sick_balance}</div>
+            <p className="text-xs font-medium text-blue-600/80 dark:text-blue-400 mt-1">Available days</p>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Comp-Off</CardTitle>
+        {/* Work From Home - Orange Gradient */}
+        <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-900/10 shadow-sm transition-all hover:shadow-md">
+          <div className="absolute top-0 right-0 p-4 opacity-10">
+            <Laptop className="h-24 w-24 text-orange-600" />
+          </div>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 z-10">
+            <CardTitle className="text-sm font-semibold text-orange-700 dark:text-orange-300">Work From Home</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{user.comp_off_balance}</div>
-            <p className="text-xs text-slate-500">Approved claims</p>
+          <CardContent className="z-10">
+            <div className="text-4xl font-bold text-orange-900 dark:text-orange-100">{user.wfh_balance}</div>
+            <p className="text-xs font-medium text-orange-600/80 dark:text-orange-400 mt-1">Available days</p>
+          </CardContent>
+        </Card>
+
+        {/* Comp-Off - Purple Gradient */}
+        <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-900/10 shadow-sm transition-all hover:shadow-md">
+          <div className="absolute top-0 right-0 p-4 opacity-10">
+            <Clock className="h-24 w-24 text-purple-600" />
+          </div>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 z-10">
+            <CardTitle className="text-sm font-semibold text-purple-700 dark:text-purple-300">Comp-Off</CardTitle>
+          </CardHeader>
+          <CardContent className="z-10">
+            <div className="text-4xl font-bold text-purple-900 dark:text-purple-100">{user.comp_off_balance}</div>
+            <p className="text-xs font-medium text-purple-600/80 dark:text-purple-400 mt-1">Approved claims</p>
           </CardContent>
         </Card>
       </div>
@@ -146,15 +172,15 @@ function HolidayWidget() {
             <p className="text-sm text-slate-500">No holidays found for this year.</p>
           )}
           {filteredHolidays.map((h: any) => (
-            <div key={h._id || h.id} className="flex items-center justify-between border-b pb-2 last:border-0 last:pb-0">
+            <div key={h._id || h.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 last:border-0 last:pb-0">
               <div className="space-y-1">
-                <p className="text-sm font-medium leading-none">{h.name}</p>
-                <p className="text-xs text-slate-500">
+                <p className="text-sm font-medium leading-none text-slate-900 dark:text-slate-100">{h.name}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
                   {format(parseISO(h.date), 'EEE, MMM d')}
                 </p>
               </div>
               {h.is_optional && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                <span className="inline-flex items-center px-2 py-1 rounded-md text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
                   Optional
                 </span>
               )}

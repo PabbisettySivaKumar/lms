@@ -21,29 +21,42 @@ interface User {
     blood_group?: string;
     address?: string;
     father_name?: string;
+    father_dob?: string;
     mother_name?: string;
+    mother_dob?: string;
     spouse_name?: string;
+    spouse_dob?: string;
     children_names?: string;
     permanent_address?: string;
     emergency_contact_name?: string;
     emergency_contact_phone?: string;
     employee_type?: string;
     employee_id: string; // Ensure this is here
+    profile_picture_url?: string;
+    documents?: {
+        name: string;
+        url: string;
+        saved_filename: string;
+        uploaded_at: string;
+    }[];
 }
 
 interface AuthState {
     user: User | null;
     isLoading: boolean;
-    login: (data: { email: string; password: string }) => Promise<void>;
+    login: (data: { email: string; password: string }) => Promise<boolean>;
     logout: () => void;
     fetchUser: () => Promise<void>;
+    refreshUser: () => Promise<void>;
     forgotPassword: (email: string) => Promise<void>;
     resetPassword: (token: string, newPassword: string) => Promise<void>;
+    firstLoginReset: (newPassword: string) => Promise<void>;
 }
 
 interface LoginResponse {
     access_token: string;
     token_type: string;
+    reset_required: boolean;
 }
 
 export const useAuth = create<AuthState>((set, get) => ({
@@ -62,9 +75,10 @@ export const useAuth = create<AuthState>((set, get) => ({
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             });
 
-            const { access_token } = response.data;
+            const { access_token, reset_required } = response.data;
             localStorage.setItem('access_token', access_token);
             await get().fetchUser();
+            return reset_required;
         } catch (error) {
             set({ isLoading: false });
             throw error;
@@ -88,6 +102,10 @@ export const useAuth = create<AuthState>((set, get) => ({
         }
     },
 
+    refreshUser: async () => {
+        await get().fetchUser();
+    },
+
     forgotPassword: async (email: string) => {
         set({ isLoading: true });
         try {
@@ -104,6 +122,19 @@ export const useAuth = create<AuthState>((set, get) => ({
                 token,
                 new_password: newPassword
             });
+        } finally {
+            set({ isLoading: false });
+        }
+    },
+
+    firstLoginReset: async (newPassword: string) => {
+        set({ isLoading: true });
+        try {
+            await api.patch('/auth/first-login-reset', {
+                new_password: newPassword
+            });
+            // Update user state locally to reflect reset is done?
+            // Usually we just proceed.
         } finally {
             set({ isLoading: false });
         }

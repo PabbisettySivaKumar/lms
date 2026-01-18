@@ -1,10 +1,14 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from typing import List
 from datetime import datetime
-from src.db import users_collection
+from src.db import users_collection, db
 from src.models.user import User, UserCreateAdmin, UserRole
 from src.utils.security import get_password_hash
 from src.routes.auth import get_current_user_email, verify_admin
+from fastapi import UploadFile, File
+import shutil
+from pathlib import Path
+import os
 
 router = APIRouter(prefix="", tags=["Users"])
 
@@ -36,6 +40,12 @@ async def update_user_me(
     # Handle DOB conversion if present
     if update_data.get("dob"):
          update_data["dob"] = str(update_data["dob"])
+    if update_data.get("father_dob"):
+         update_data["father_dob"] = str(update_data["father_dob"])
+    if update_data.get("mother_dob"):
+         update_data["mother_dob"] = str(update_data["mother_dob"])
+    if update_data.get("spouse_dob"):
+         update_data["spouse_dob"] = str(update_data["spouse_dob"])
          
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -43,6 +53,47 @@ async def update_user_me(
     await users_collection.update_one(
         {"_id": ObjectId(current_user.id)},
         {"$set": update_data}
+    )
+    
+    updated_user = await users_collection.find_one({"_id": ObjectId(current_user.id)})
+    updated_user["_id"] = str(updated_user["_id"])
+    updated_user = await users_collection.find_one({"_id": ObjectId(current_user.id)})
+    updated_user["_id"] = str(updated_user["_id"])
+    return User(**updated_user)
+
+@router.post("/users/me/profile-picture", response_model=User)
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
+    file_ext = Path(file.filename).suffix.lower()
+    
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only images allowed.")
+
+    # Create uploads directory if not exists
+    UPLOAD_DIR = Path("static/uploads/profile_pictures")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    filename = f"{current_user.id}_{int(datetime.now().timestamp())}{file_ext}"
+    file_path = UPLOAD_DIR / filename
+    
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    finally:
+        file.file.close()
+        
+    # Update user profile picture URL
+    # Assuming the app mounts /static at /static
+    base_url = "/static/uploads/profile_pictures"
+    full_url = f"{base_url}/{filename}"
+    
+    await users_collection.update_one(
+        {"_id": ObjectId(current_user.id)},
+        {"$set": {"profile_picture_url": full_url}}
     )
     
     updated_user = await users_collection.find_one({"_id": ObjectId(current_user.id)})
@@ -71,15 +122,31 @@ async def create_user_admin(user_in: UserCreateAdmin, admin=Depends(verify_admin
             raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     hashed_password = get_password_hash(user_in.password)
     
+    # Fetch active policy
+    current_year = datetime.now().year
+    policy = await db.policies.find_one({"year": current_year})
+    
+    # Defaults
+    sick_quota = 3.0
+    wfh_quota = 0
+    casual_quota = 12.0 # Default yearly quota
+    
+    if policy:
+        sick_quota = float(policy.get("sick_leave_quota", 3.0))
+        wfh_quota = int(policy.get("wfh_quota", 0))
+        casual_quota = float(policy.get("casual_leave_quota", 12.0))
+
+    initial_cl = casual_quota / 12.0
+
     user_dict = user_in.dict()
     user_dict.update({
         "hashed_password": hashed_password,
         "is_active": True,
         "reset_required": True,
-        "casual_balance": 0.0,
-        "sick_balance": 0.0,
+        "casual_balance": initial_cl,
+        "sick_balance": sick_quota,
         "earned_balance": 0.0,
-        "wfh_balance": 0,
+        "wfh_balance": wfh_quota,
         "comp_off_balance": 0.0,
         "manager_name": manager_name
     })
@@ -138,7 +205,95 @@ async def update_user_balance(user_id: str, balance_data: UserBalanceUpdate, adm
         {"$set": update_data}
     )
     
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No balance fields provided")
+        
+    await users_collection.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": update_data}
+    )
+    
     updated_user = await users_collection.find_one({"_id": ObjectId(user_id)})
+    updated_user["_id"] = str(updated_user["_id"])
+    return User(**updated_user)
+
+@router.post("/users/me/documents", response_model=User)
+async def upload_documents(
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx"}
+    
+    # Create documents directory
+    UPLOAD_DIR = Path(f"static/uploads/documents/{current_user.id}")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    
+    new_docs = []
+    
+    for file in files:
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
+            continue # Skip invalid files or raise error? Let's skip for now or better, raise if any invalid?
+            # User experience: better to probably allow valid ones or fail all? 
+            # Let's simple fail if any checks fail for safety
+            # raise HTTPException(status_code=400, detail=f"Invalid file type: {file.filename}")
+        
+        # Unique filename to prevent overwrite
+        timestamp = int(datetime.now().timestamp())
+        safe_filename = file.filename.replace(" ", "_")
+        saved_filename = f"{timestamp}_{safe_filename}"
+        file_path = UPLOAD_DIR / saved_filename
+        
+        try:
+            with file_path.open("wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+        finally:
+            file.file.close()
+            
+        new_docs.append({
+            "name": file.filename,
+            "url": f"/static/uploads/documents/{current_user.id}/{saved_filename}",
+            "saved_filename": saved_filename, # Used for deletion
+            "uploaded_at": datetime.now().isoformat()
+        })
+        
+    if new_docs:
+        await users_collection.update_one(
+            {"_id": ObjectId(current_user.id)},
+            {"$push": {"documents": {"$each": new_docs}}}
+        )
+        
+    updated_user = await users_collection.find_one({"_id": ObjectId(current_user.id)})
+    updated_user["_id"] = str(updated_user["_id"])
+    return User(**updated_user)
+
+@router.delete("/users/me/documents/{filename}", response_model=User)
+async def delete_document(filename: str, current_user: User = Depends(get_current_user)):
+    # Find document to get saved path
+    # Actually we stored 'saved_filename' in the dict, but we are passing 'saved_filename' as param?
+    # Or passing original name? Usually passing ID or unique saved_filename is safer.
+    # Let's assume frontend passes the 'saved_filename'.
+    
+    # Verify file belongs to user
+    user_doc = await users_collection.find_one(
+        {"_id": ObjectId(current_user.id), "documents.saved_filename": filename}
+    )
+    
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    # Remove from disk
+    file_path = Path(f"static/uploads/documents/{current_user.id}/{filename}")
+    if file_path.exists():
+        os.remove(file_path)
+        
+    # Remove from DB
+    await users_collection.update_one(
+        {"_id": ObjectId(current_user.id)},
+        {"$pull": {"documents": {"saved_filename": filename}}}
+    )
+    
+    updated_user = await users_collection.find_one({"_id": ObjectId(current_user.id)})
     updated_user["_id"] = str(updated_user["_id"])
     return User(**updated_user)
 
@@ -201,5 +356,44 @@ async def update_user_details(
     )
     
     updated_user = await users_collection.find_one({"_id": ObjectId(user_id)})
-    updated_user["_id"] = str(updated_user["_id"])
-    return User(**updated_user)
+    if updated_user:
+        updated_user["_id"] = str(updated_user["_id"])
+        return User(**updated_user)
+    
+    raise HTTPException(status_code=404, detail="User not found after update")
+
+@router.get("/admin/integrity-check")
+async def check_data_integrity(admin=Depends(verify_admin)):
+    pipeline = [
+        {"$group": {
+            "_id": "$email",
+            "count": {"$sum": 1},
+            "ids": {"$push": "$_id"}
+        }},
+        {"$match": {
+            "count": {"$gt": 1}
+        }}
+    ]
+    
+    duplicates = []
+    cursor = users_collection.aggregate(pipeline)
+    async for doc in cursor:
+        # Fetch details for these IDs
+        details = []
+        for uid in doc['ids']:
+             user = await users_collection.find_one({"_id": uid})
+             if user:
+                 details.append({
+                     "id": str(user["_id"]),
+                     "name": user.get("full_name"),
+                     "role": user.get("role"),
+                     "is_active": user.get("is_active")
+                 })
+                 
+        duplicates.append({
+            "email": doc["_id"],
+            "count": doc["count"],
+            "accounts": details
+        })
+        
+    return {"status": "issues_found" if duplicates else "healthy", "duplicates": duplicates}

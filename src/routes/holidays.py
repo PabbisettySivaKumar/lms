@@ -7,9 +7,13 @@ from src.models.user import UserRole
 from src.routes.auth import get_current_user_email, verify_admin, users_collection
 
 router = APIRouter(prefix="/admin", tags=["Holidays"])
+
 calendar_router = APIRouter(prefix="/calendar", tags=["Calendar"])
 
 holidays_collection = db["holidays"]
+
+from src.routes.users import get_current_user
+from src.models.user import User
 
 
 
@@ -51,21 +55,14 @@ async def create_holiday(holiday: HolidayCreate, admin=Depends(verify_admin)):
     res = await holidays_collection.insert_one(h_dict)
     return str(res.inserted_id)
 
-@router.get("/holidays", response_model=List[Holiday])
-async def list_holidays_admin(admin=Depends(verify_admin)):
-    # Retrieve all holidays sorted by date
-    holidays = []
-    cursor = holidays_collection.find({}).sort("date", 1)
-    async for doc in cursor:
-        doc["_id"] = str(doc["_id"])
-        holidays.append(Holiday(**doc))
-    return holidays
+
 
 from bson import ObjectId
 
 from datetime import datetime
 from src.db import job_logs_collection, job_logs_collection # Need job_logs
 from src.models.job import JobLog
+from src.services.scheduler import yearly_leave_reset
 
 @router.delete("/holidays/{holiday_id}")
 async def delete_holiday(holiday_id: str, admin=Depends(verify_admin)):
@@ -87,55 +84,29 @@ async def run_yearly_reset(current_user: dict = Depends(verify_admin)):
     - Idempotent: Runs only once per year.
     """
     
-    # 1. Determine Job Name (YearlyReset_YYYY)
+    # 1. Determine Job Name (Manual_YearlyReset_YYYY_Timestamp)
     current_year = datetime.utcnow().year
-    next_year = current_year # If I run it in Jan 2026, it is reset FOR 2026.
     
-    job_name = f"yearly_reset_{next_year}"
+    # For manual triggers, we force the run by making the job name unique.
+    # This allows re-running the logic if needed (e.g. after changing policy).
+    timestamp = int(datetime.utcnow().timestamp())
+    job_name = f"manual_yearly_reset_{current_year}_{timestamp}"
     
-    # 2. Idempotency Check
+    # 2. Idempotency Check (Skipped implicitly by unique name, but kept for structure)
     existing_job = await job_logs_collection.find_one({"job_name": job_name, "status": "SUCCESS"})
     if existing_job:
         return {
             "message": f"Job {job_name} has already been executed successfully.",
             "executed_at": existing_job["executed_at"]
         }
-        
     # 3. Execution Logic
     executed_at = datetime.utcnow()
-    logs = []
-    operations = []
-    updated_count = 0
+    updated_count = -1 
     
     try:
-        # Fetch all active users
-        async for user in users_collection.find({"is_active": True}):
-            old_el = user.get("earned_balance", 0.0)
-            
-            # Logic
-            new_cl = 12.0
-            new_sl = 12.0
-            new_el = old_el / 2.0 # Exact float division, no rounding
-            
-            # Prepare Bulk Operation
-            operations.append(
-                UpdateOne(
-                    {"_id": user["_id"]},
-                    {"$set": {
-                        "casual_balance": new_cl,
-                        "sick_balance": new_sl,
-                        "earned_balance": new_el
-                    }}
-                )
-            )
-            
-            logs.append(f"User {user['email']}: EL {old_el} -> {new_el}")
-            updated_count += 1
-            
-        # Execute Bulk Write
-        if operations:
-            await users_collection.bulk_write(operations)
-            
+        # Execute Shared Logic
+        await yearly_leave_reset()
+
         # 4. Success Log
         job_log = JobLog(
             job_name=job_name,
@@ -143,16 +114,16 @@ async def run_yearly_reset(current_user: dict = Depends(verify_admin)):
             executed_at=executed_at,
             executed_by=current_user["email"],
             details={
-                "users_processed": updated_count,
-                "notes": "Reset CL/SL to 12. Halved EL.",
-                "sample_logs": logs[:50] # Store first 50 for audit
+                "users_processed": "Batch (Via Scheduler Logic)",
+                "notes": "Triggered manual yearly reset via scheduler function.",
             }
         )
-        await job_logs_collection.insert_one(job_log.dict(by_alias=True))
+        # Exclude _id so Mongo generates it
+        log_dict = job_log.dict(by_alias=True, exclude={"id"})
+        await job_logs_collection.insert_one(log_dict)
         
         return {
             "message": "Yearly reset completed successfully.",
-            "users_processed": updated_count,
             "job_id": job_name
         }
         
@@ -165,11 +136,12 @@ async def run_yearly_reset(current_user: dict = Depends(verify_admin)):
             executed_by=current_user["email"],
             details={"error": str(e)}
         )
-        await job_logs_collection.insert_one(job_log.dict(by_alias=True))
+        log_dict = job_log.dict(by_alias=True, exclude={"id"})
+        await job_logs_collection.insert_one(log_dict)
         raise HTTPException(status_code=500, detail=f"Job failed: {str(e)}")
 
 @calendar_router.get("/holidays", response_model=List[Holiday])
-async def get_holidays():
+async def get_holidays(current_user: User = Depends(get_current_user)):
     holidays = []
     # Sort by date for calendar convenience
     cursor = holidays_collection.find({}).sort("date", 1)

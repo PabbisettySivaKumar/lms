@@ -1,118 +1,110 @@
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
-from typing import List
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File
 import shutil
 import os
-from bson import ObjectId
+from pathlib import Path
 from src.db import db
-from src.models.policy import Policy, PolicyCreate, PolicyAcknowledgment
-from src.models.user import User, UserRole
+from src.models.policy import LeavePolicy
 from src.routes.users import get_current_user
-from src.routes.auth import verify_admin
+from src.models.user import User, UserRole
+from typing import List
+from datetime import datetime
 
 router = APIRouter(prefix="/policies", tags=["Policies"])
 
-# Collections
-policies_collection = db["policies"]
-acknowledgments_collection = db["policy_acknowledgments"]
+policies_collection = db.policies
 
-# Ensure upload directory exists
-UPLOAD_DIR = "static/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Helper to verify admin
+def verify_admin(current_user: User = Depends(get_current_user)):
+    if current_user.role not in [UserRole.ADMIN, UserRole.HR, UserRole.FOUNDER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation not permitted"
+        )
+    return current_user
 
-@router.post("/admin", response_model=Policy)
-async def upload_policy(
-    title: str = Form(...),
-    file: UploadFile = File(...),
-    admin: User = Depends(verify_admin)
-):
-    # Save file
-    timestamp = int(datetime.utcnow().timestamp())
-    filename = f"{timestamp}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
+@router.get("/active", response_model=LeavePolicy)
+async def get_active_policy():
+    current_year = datetime.now().year
     
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Try to find policy for current year
+    policy = await policies_collection.find_one({"year": current_year})
+    
+    if policy:
+        policy["_id"] = str(policy["_id"])
+        return LeavePolicy(**policy)
         
-    # Create DB Entry
-    policy_doc = {
-        "title": title,
-        "file_url": f"/static/uploads/{filename}",
-        "created_at": datetime.utcnow()
+    # Fallback to default policy if none found
+    default_policy = {
+        "year": current_year,
+        "casual_leave_quota": 12,
+        "sick_leave_quota": 5,
+        "wfh_quota": 2,
+        "is_active": True
     }
-    
-    result = await policies_collection.insert_one(policy_doc)
-    created_policy = await policies_collection.find_one({"_id": result.inserted_id})
-    created_policy["_id"] = str(created_policy["_id"])
-    
-    return Policy(**created_policy)
+    return LeavePolicy(**default_policy)
 
-@router.get("", response_model=List[Policy])
-async def list_policies(current_user: User = Depends(get_current_user)):
+@router.get("/", response_model=List[LeavePolicy])
+async def get_all_policies(current_user: User = Depends(verify_admin)):
     policies = []
-    cursor = policies_collection.find().sort("created_at", -1)
-    
-    async for doc in cursor:
-        doc["_id"] = str(doc["_id"])
-        
-        # Check acknowledgment
-        ack = await acknowledgments_collection.find_one({
-            "user_id": str(current_user.id),
-            "policy_id": str(doc["_id"])
-        })
-        
-        doc["is_acknowledged"] = ack is not None
-        doc["acknowledged_at"] = ack["acknowledged_at"] if ack else None
-        
-        policies.append(Policy(**doc))
-        
+    async for p in policies_collection.find().sort("year", -1):
+        p["_id"] = str(p["_id"])
+        policies.append(LeavePolicy(**p))
     return policies
 
-@router.post("/{policy_id}/acknowledge")
-async def acknowledge_policy(policy_id: str, current_user: User = Depends(get_current_user)):
-    if not ObjectId.is_valid(policy_id):
-        raise HTTPException(status_code=400, detail="Invalid policy ID")
-        
-    policy = await policies_collection.find_one({"_id": ObjectId(policy_id)})
-    if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found")
-        
-    # Check if already acknowledged
-    existing = await acknowledgments_collection.find_one({
-        "user_id": str(current_user.id),
-        "policy_id": policy_id
-    })
+@router.post("/", response_model=LeavePolicy)
+async def create_or_update_policy(policy_data: LeavePolicy, current_user: User = Depends(verify_admin)):
+    # Check if policy exists for the year
+    existing = await policies_collection.find_one({"year": policy_data.year})
+    
+    update_data = policy_data.dict(exclude={"id"})
     
     if existing:
-        return {"message": "Already acknowledged"}
+        await policies_collection.update_one(
+            {"year": policy_data.year},
+            {"$set": update_data}
+        )
+        pid = existing["_id"]
+    else:
+        result = await policies_collection.insert_one(update_data)
+        pid = result.inserted_id
         
-    ack_doc = {
-        "user_id": str(current_user.id),
-        "policy_id": policy_id,
-        "acknowledged_at": datetime.utcnow()
-    }
-    
-    await acknowledgments_collection.insert_one(ack_doc)
-    return {"message": "Policy acknowledged successfully"}
+    updated = await policies_collection.find_one({"_id": pid})
+    updated["_id"] = str(updated["_id"])
+    return LeavePolicy(**updated)
 
-@router.delete("/admin/{policy_id}")
-async def delete_policy(policy_id: str, admin: User = Depends(verify_admin)):
-    if not ObjectId.is_valid(policy_id):
-        raise HTTPException(status_code=400, detail="Invalid policy ID")
-        
-    policy = await policies_collection.find_one({"_id": ObjectId(policy_id)})
+@router.post("/{year}/document", response_model=LeavePolicy)
+async def upload_policy_document(
+    year: int, 
+    file: UploadFile = File(...), 
+    current_user: User = Depends(verify_admin)
+):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    # Check if policy exists
+    policy = await policies_collection.find_one({"year": year})
     if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found")
+        raise HTTPException(status_code=404, detail=f"Policy for year {year} not found. Please save the policy first.")
+        
+    UPLOAD_DIR = Path("static/uploads/policies")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Optional: Delete file from disk
-    # try:
-    #     filename = policy["file_url"].split('/')[-1]
-    #     os.remove(os.path.join(UPLOAD_DIR, filename))
-    # except:
-    #     pass
-
-    await policies_collection.delete_one({"_id": ObjectId(policy_id)})
-    # Also delete acknowledgments? Optional.
-    await acknowledgments_collection.delete_many({"policy_id": policy_id})
+    filename = f"{year}_policy.pdf"
+    file_path = UPLOAD_DIR / filename
     
-    return {"message": "Policy deleted"}
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    finally:
+        file.file.close()
+        
+    document_url = f"/static/uploads/policies/{filename}"
+    
+    await policies_collection.update_one(
+        {"year": year},
+        {"$set": {"document_url": document_url}}
+    )
+    
+    updated = await policies_collection.find_one({"year": year})
+    updated["_id"] = str(updated["_id"])
+    return LeavePolicy(**updated)

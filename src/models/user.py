@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, validator
 
@@ -29,14 +29,19 @@ class UserBase(BaseModel):
     earned_balance: float = 0.0
     wfh_balance: int = 2
     comp_off_balance: float = 0.0
+    profile_picture_url: Optional[str] = None
+    documents: List[dict] = [] # List of {"name": str, "url": str, "uploaded_at": str}
     
     # Personal Details
     dob: Optional[date] = None
     blood_group: Optional[str] = None
     address: Optional[str] = None
     father_name: Optional[str] = None
+    father_dob: Optional[date] = None
     mother_name: Optional[str] = None
+    mother_dob: Optional[date] = None
     spouse_name: Optional[str] = None
+    spouse_dob: Optional[date] = None
     children_names: Optional[str] = None
     permanent_address: Optional[str] = None
     
@@ -69,8 +74,11 @@ class UserUpdateProfile(BaseModel):
     children_names: Optional[str] = None
     address: Optional[str] = None
     father_name: Optional[str] = None
+    father_dob: Optional[date] = None
     mother_name: Optional[str] = None
+    mother_dob: Optional[date] = None
     spouse_name: Optional[str] = None
+    spouse_dob: Optional[date] = None
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     dob: Optional[date] = None
