@@ -25,3 +25,9 @@ class LeavePolicy(BaseModel):
 
     class Config:
         populate_by_name = True
+
+class PolicyAcknowledgment(BaseModel):
+    user_id: str
+    year: int
+    document_url: str
+    acknowledged_at: datetime = Field(default_factory=datetime.utcnow)

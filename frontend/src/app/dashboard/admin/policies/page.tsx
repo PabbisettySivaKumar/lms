@@ -14,8 +14,15 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import { toast } from 'sonner';
-import { Loader2, Save, Upload, FileText } from 'lucide-react';
+import { Loader2, Save, Upload, FileText, Trash2, ShieldCheck, Eye, Search, CheckCircle2, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+} from '@/components/ui/dialog';
 
 interface LeavePolicy {
     year: number;
@@ -47,8 +54,14 @@ export default function PoliciesPage() {
     const [sickQuota, setSickQuota] = useState<number>(5);
     const [wfhQuota, setWfhQuota] = useState<number>(2);
 
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
     const [docName, setDocName] = useState<string>('');
+
+    // Report State
+    const [reportYear, setReportYear] = useState<number | null>(null);
+    const [ackReport, setAckReport] = useState<any[]>([]);
+    const [isReportLoading, setIsReportLoading] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
         fetchPolicies();
@@ -68,6 +81,25 @@ export default function PoliciesPage() {
             console.error("Failed to fetch policies", error);
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const fetchAckReport = async (year: number) => {
+        setReportYear(year);
+        setIsReportLoading(true);
+        try {
+            const token = localStorage.getItem('access_token');
+            const res = await fetch(`${API_URL}/policies/${year}/report`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAckReport(data);
+            }
+        } catch (error) {
+            toast.error("Failed to fetch acknowledgment report");
+        } finally {
+            setIsReportLoading(false);
         }
     };
 
@@ -106,39 +138,39 @@ export default function PoliciesPage() {
     };
 
     const handleUploadDocument = async () => {
-        if (!selectedFile) {
-            toast.error("Please select a file first");
-            return;
-        }
+        if (selectedFiles.length === 0) return;
 
         setIsUploading(true);
         try {
             const token = localStorage.getItem('access_token');
-            const formData = new FormData();
-            formData.append('file', selectedFile);
 
-            const url = new URL(`${API_URL}/policies/${year}/document`);
-            if (docName) url.searchParams.append('name', docName);
+            // Upload files sequentially
+            for (const file of selectedFiles) {
+                const formData = new FormData();
+                formData.append('file', file);
 
-            const res = await fetch(url.toString(), {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                },
-                body: formData
-            });
-
-            if (!res.ok) {
-                // Determine if 404 (policy mismatch) logic handled in backend
-                if (res.status === 404) {
-                    throw new Error(`Policy for ${year} not found. Save quotas first.`);
+                const url = new URL(`${API_URL}/policies/${year}/document`);
+                // If only one file is selected, use the custom label if provided
+                if (selectedFiles.length === 1 && docName) {
+                    url.searchParams.append('name', docName);
                 }
-                throw new Error("Upload failed");
+
+                const res = await fetch(url.toString(), {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: formData
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Failed to upload ${file.name}`);
+                }
             }
 
-            toast.success("Document uploaded successfully");
+            toast.success(`${selectedFiles.length} document(s) uploaded successfully`);
             await fetchPolicies();
-            setSelectedFile(null);
+            setSelectedFiles([]);
             setDocName('');
         } catch (error: any) {
             toast.error(error.message || "Failed to upload document");
@@ -169,6 +201,34 @@ export default function PoliciesPage() {
             toast.error(error.message || "Failed to delete document");
         }
     };
+
+    const handleDeletePolicy = async (year: number) => {
+        if (!confirm(`Are you sure you want to delete the entire policy for ${year}? This will also delete all associated documents.`)) return;
+
+        try {
+            const token = localStorage.getItem('access_token');
+            const res = await fetch(`${API_URL}/policies/${year}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (!res.ok) {
+                throw new Error("Failed to delete policy");
+            }
+
+            toast.success(`Policy for ${year} deleted`);
+            await fetchPolicies();
+        } catch (error: any) {
+            toast.error(error.message || "Failed to delete policy");
+        }
+    };
+
+    const filteredReport = ackReport.filter(r =>
+        r.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.email?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
     return (
         <div className="space-y-6">
@@ -273,30 +333,51 @@ export default function PoliciesPage() {
                                     id="policy-doc"
                                     type="file"
                                     accept="application/pdf"
-                                    onChange={(e) => setSelectedFile(e.target.files ? e.target.files[0] : null)}
+                                    multiple
+                                    onChange={(e) => {
+                                        const files = e.target.files ? Array.from(e.target.files) : [];
+                                        setSelectedFiles(files);
+                                    }}
                                 />
-                                {selectedFile && (
-                                    <p className="text-xs text-blue-600">Selected: {selectedFile.name}</p>
+                                {selectedFiles.length > 0 && (
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between items-center">
+                                            <p className="text-xs font-medium text-blue-600">Selected ({selectedFiles.length}):</p>
+                                            <button
+                                                onClick={() => setSelectedFiles([])}
+                                                className="text-[10px] text-red-500 hover:underline"
+                                            >
+                                                Clear Selection
+                                            </button>
+                                        </div>
+                                        <ul className="text-[10px] text-slate-500 list-disc pl-4 max-h-20 overflow-y-auto">
+                                            {selectedFiles.map((f, i) => (
+                                                <li key={i} className="truncate">{f.name}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
                                 )}
                             </div>
-                            <div className="space-y-2">
-                                <Label htmlFor="doc-name">Document Label (e.g. Leave Policy)</Label>
-                                <Input
-                                    id="doc-name"
-                                    type="text"
-                                    placeholder="Leave Policy / Holiday List..."
-                                    value={docName}
-                                    onChange={(e) => setDocName(e.target.value)}
-                                />
-                            </div>
+                            {selectedFiles.length === 1 && (
+                                <div className="space-y-2">
+                                    <Label htmlFor="doc-name">Document Label (e.g. Leave Policy)</Label>
+                                    <Input
+                                        id="doc-name"
+                                        type="text"
+                                        placeholder="Leave Policy / Holiday List..."
+                                        value={docName}
+                                        onChange={(e) => setDocName(e.target.value)}
+                                    />
+                                </div>
+                            )}
                             <Button
                                 onClick={handleUploadDocument}
-                                disabled={isUploading || !selectedFile}
+                                disabled={isUploading || selectedFiles.length === 0}
                                 variant="secondary"
                                 className="w-full"
                             >
                                 {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-                                Upload Document
+                                {selectedFiles.length > 1 ? `Upload ${selectedFiles.length} Documents` : 'Upload Document'}
                             </Button>
                         </CardContent>
                     </Card>
@@ -321,11 +402,12 @@ export default function PoliciesPage() {
                                         <TableRow>
                                             <TableHead>Year</TableHead>
                                             <TableHead>CL / SL / WFH</TableHead>
+                                            <TableHead className="w-[100px]"></TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {policies.map((policy) => (
-                                            <TableRow key={policy._id}>
+                                            <TableRow key={policy._id} className="group">
                                                 <TableCell className="font-medium align-top">
                                                     <div className="flex items-center">
                                                         {policy.year}
@@ -339,6 +421,28 @@ export default function PoliciesPage() {
                                                         <span className="font-semibold">{policy.casual_leave_quota}</span> CL /
                                                         <span className="font-semibold"> {policy.sick_leave_quota}</span> SL /
                                                         <span className="font-semibold"> {policy.wfh_quota}</span> WFH
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="align-top">
+                                                    <div className="flex items-center gap-1">
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => fetchAckReport(policy.year)}
+                                                            className="h-8 w-8 p-0 text-blue-500 hover:text-blue-700 hover:bg-blue-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            title="View Acknowledgment Report"
+                                                        >
+                                                            <ShieldCheck className="h-4 w-4" />
+                                                        </Button>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => handleDeletePolicy(policy.year)}
+                                                            className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            title="Delete Policy"
+                                                        >
+                                                            <Trash2 className="h-4 w-4" />
+                                                        </Button>
                                                     </div>
                                                 </TableCell>
                                             </TableRow>
@@ -391,9 +495,9 @@ export default function PoliciesPage() {
                                                                         variant="ghost"
                                                                         size="sm"
                                                                         onClick={() => handleDeleteDocument(policy.year, doc.url)}
-                                                                        className="h-6 px-2 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                        className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
                                                                     >
-                                                                        Delete
+                                                                        <Trash2 className="h-4 w-4" />
                                                                     </Button>
                                                                 </div>
                                                             ))
@@ -424,6 +528,121 @@ export default function PoliciesPage() {
                     </Card>
                 </div>
             </div>
+
+            {/* Acknowledgment Report Dialog */}
+            <Dialog open={reportYear !== null} onOpenChange={(open) => !open && setReportYear(null)}>
+                <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <ShieldCheck className="w-5 h-5 text-blue-600" />
+                            Acknowledgment Report - {reportYear}
+                        </DialogTitle>
+                        <DialogDescription>
+                            List of all active employees and their policy acknowledgment status for {reportYear}.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="relative mt-4">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                        <Input
+                            placeholder="Search employee by name or email..."
+                            className="pl-9"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
+                    </div>
+
+                    <div className="flex-1 overflow-auto mt-4 border rounded-lg">
+                        <Table>
+                            <TableHeader className="bg-slate-50 sticky top-0">
+                                <TableRow>
+                                    <TableHead>Employee</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead>Acknowledged At</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {isReportLoading ? (
+                                    <TableRow>
+                                        <TableCell colSpan={3} className="text-center py-8">
+                                            <Loader2 className="h-6 w-6 animate-spin mx-auto text-slate-400" />
+                                            <p className="text-sm text-slate-500 mt-2">Loading report...</p>
+                                        </TableCell>
+                                    </TableRow>
+                                ) : filteredReport.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={3} className="text-center py-8 text-slate-500">
+                                            No employees found matching your search.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    filteredReport.map((row) => (
+                                        <TableRow key={row.user_id}>
+                                            <TableCell>
+                                                <div className="font-medium text-slate-900">{row.full_name}</div>
+                                                <div className="text-xs text-slate-500">{row.email}</div>
+                                            </TableCell>
+                                            <TableCell>
+                                                {row.fully_acknowledged ? (
+                                                    <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border-green-200">
+                                                        <CheckCircle2 className="w-3 h-3 mr-1" />
+                                                        Complete
+                                                    </Badge>
+                                                ) : row.acknowledged_count > 0 ? (
+                                                    <Badge variant="secondary" className="bg-amber-100 text-amber-700 border-amber-200">
+                                                        <Loader2 className="w-3 h-3 mr-1" />
+                                                        Partial ({row.acknowledged_count}/{row.total_documents})
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge variant="secondary" className="bg-slate-100 text-slate-500 border-slate-200">
+                                                        <XCircle className="w-3 h-3 mr-1" />
+                                                        Pending
+                                                    </Badge>
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="text-xs space-y-1">
+                                                    {row.acknowledgments.length > 0 ? (
+                                                        row.acknowledgments.map((ack: any, i: number) => {
+                                                            const docName = policies.find(p => p.year === reportYear)?.documents?.find(d => d.url === ack.document_url)?.name || "Document";
+                                                            return (
+                                                                <div key={i} className="flex items-center gap-1 text-slate-600">
+                                                                    <CheckCircle2 className="w-2.5 h-2.5 text-green-500" />
+                                                                    <span>{docName}</span>
+                                                                    <span className="text-[10px] text-slate-400">({new Date(ack.acknowledged_at).toLocaleDateString()})</span>
+                                                                </div>
+                                                            );
+                                                        })
+                                                    ) : (
+                                                        <span className="text-slate-400 font-italic">No documents read</span>
+                                                    )}
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                    <div className="flex justify-between items-center mt-4 text-xs text-slate-500">
+                        <div>Showing {filteredReport.length} employees</div>
+                        <div className="flex gap-4">
+                            <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-green-500" />
+                                <span>{ackReport.filter(r => r.fully_acknowledged).length} Complete</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-amber-500" />
+                                <span>{ackReport.filter(r => !r.fully_acknowledged && r.acknowledged_count > 0).length} Partial</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-slate-300" />
+                                <span>{ackReport.filter(r => r.acknowledged_count === 0).length} Pending</span>
+                            </div>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
