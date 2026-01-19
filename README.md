@@ -14,20 +14,24 @@ A comprehensive web-based application for managing employee leaves, holidays, an
 
 ### 🏢 Company Policies
 *   **Policy Management**: Admins can upload policy documents (PDFs).
-*   **Employee Acknowledgment**: Employees can view policies and digitally acknowledge them.
-*   **Tracking**: Admins can view who has acknowledged which policies.
+*   **Granular Acknowledgment**: Employees must acknowledge each document individually.
+*   **Compliance Reports**: Admins can view detailed reports on who has acknowledged which documents, with "Partial", "Pending", or "Complete" statuses.
 
 ### 👤 User Profile
 *   **Comprehensive Details**: Manage personal info, permanent address, and family details (Spouse, Children).
 *   **Balance Tracking**: Real-time view of remaining leave balances.
 
 ### 🛠 Admin Features
+*   **Leave Reports**: Export approved leave data to CSV for payroll processing and compliance. Includes date range filtering.
 *   **Holiday Import**: Bulk import holidays via CSV (supports various formats).
-
 *   **User Management**: create and manage employee accounts.
 *   **Yearly Leave Reset**: Automated job to reset casual/sick leaves and carry forward 50% earned leaves.
     *   **Endpoint**: `POST /admin/yearly-reset`
     *   **Logic**: CL/SL reset to 12.0. EL carries forward 50% (exact logic). Idempotent design.
+
+### 💻 UI/UX
+*   **Collapsible Sidebar**: Space-saving navigation with expand/collapse toggle.
+*   **Dark Mode**: Fully supported dark/light theme switching.
 
 ## Tech Stack
 
