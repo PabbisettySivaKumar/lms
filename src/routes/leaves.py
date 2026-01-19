@@ -10,8 +10,11 @@ from src.models.leave import (
     CompOffClaimCreate, CompOffStatus
 )
 from src.models.user import UserRole, User
-from src.routes.auth import get_current_user_email
+from src.routes.auth import get_current_user_email, verify_admin
 from src.services.email import send_email
+import csv
+import io
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/leaves", tags=["Leaves"])
 leaves_collection = db["leave_requests"]
@@ -661,3 +664,157 @@ async def get_my_leaves(user: User = Depends(get_current_user)):
         })
 
     return leaves
+
+@router.get("/export/stats")
+async def get_export_stats(
+    start_date: date,
+    end_date: date,
+    current_user: User = Depends(verify_admin)
+):
+    # 1. Count Approved Leaves
+    leaves_count = await leaves_collection.count_documents({
+        "status": LeaveStatus.APPROVED,
+        "start_date": {"$gte": str(start_date), "$lte": str(end_date)}
+    })
+
+    # 2. Count Approved Comp-Offs
+    comp_off_count = await comp_off_collection.count_documents({
+        "status": CompOffStatus.APPROVED,
+        "work_date": {"$gte": str(start_date), "$lte": str(end_date)}
+    })
+    
+    return {
+        "leaves_count": leaves_count,
+        "comp_off_count": comp_off_count,
+        "total_records": leaves_count + comp_off_count
+    }
+
+@router.get("/export")
+async def export_leaves(
+    start_date: date,
+    end_date: date,
+    current_user: User = Depends(verify_admin)
+):
+    # 1. Fetch Approved Leaves
+    leaves_cursor = leaves_collection.find({
+        "status": LeaveStatus.APPROVED,
+        "start_date": {"$gte": str(start_date), "$lte": str(end_date)}
+    })
+    leaves = await leaves_cursor.to_list(length=None)
+
+    # 2. Fetch Approved Comp-Offs (work_date in range)
+    comp_off_cursor = comp_off_collection.find({
+        "status": CompOffStatus.APPROVED,
+        "work_date": {"$gte": str(start_date), "$lte": str(end_date)}
+    })
+    comp_offs = await comp_off_cursor.to_list(length=None)
+
+    # 3. Collect User IDs for fetching names (Applicants + Approvers)
+    user_ids = set()
+    for l in leaves:
+        if l.get("applicant_id"): user_ids.add(str(l["applicant_id"]).strip())
+        if l.get("approver_id"): user_ids.add(str(l["approver_id"]).strip())
+
+    for c in comp_offs:
+        if c.get("claimant_id"): user_ids.add(str(c["claimant_id"]).strip())
+        if c.get("approver_id"): user_ids.add(str(c["approver_id"]).strip())
+
+    users_map = {}
+    if user_ids:
+        # Prepare queries: Check both _id (ObjectId) and employee_id (String)
+        valid_obj_ids = []
+        valid_strs = list(user_ids)
+        
+        for uid in user_ids:
+            if ObjectId.is_valid(uid):
+                valid_obj_ids.append(ObjectId(uid))
+        
+        query = {
+            "$or": [
+                {"_id": {"$in": valid_obj_ids}},
+                {"employee_id": {"$in": valid_strs}}
+            ]
+        }
+        
+        async for u in users_collection.find(query):
+            user_data = {
+                "name": u.get("full_name", "Unknown"),
+                "email": u.get("email", ""),
+                "employee_id": u.get("employee_id", "N/A"),
+                "department": u.get("department", "N/A")
+            }
+            # Map by ObjectId string
+            users_map[str(u["_id"])] = user_data
+            # Map by Employee ID
+            if u.get("employee_id"):
+                users_map[str(u["employee_id"])] = user_data
+
+    # 4. Generate CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    # Header
+    writer.writerow([
+        "Employee ID", "Name", "Email", "Leave Type", 
+        "Start Date", "End Date", "Deductible Days", "Status", "Approved By"
+    ])
+
+    # Rows
+    for l in leaves:
+        u = users_map.get(str(l.get("applicant_id", "")).strip(), {})
+        
+        app_id_raw = l.get("approver_id", "")
+        app_id_key = str(app_id_raw).strip()
+        approver_data = users_map.get(app_id_key, {})
+        
+        if approver_data.get("name"):
+            approver_name = approver_data["name"]
+        else:
+            # Fallback for deleted users or missing IDs
+            approver_name = f"Unknown User ({app_id_raw})" if app_id_raw else ""
+        
+        writer.writerow([
+            u.get("employee_id", ""),
+            u.get("name", ""),
+            u.get("email", ""),
+            l["type"],
+            l["start_date"],
+            l["end_date"] or "N/A",
+            l.get("deductible_days", 0),
+            l["status"],
+            approver_name
+        ])
+        
+    for c in comp_offs:
+        u = users_map.get(str(c.get("claimant_id", "")).strip(), {})
+        
+        app_id_raw = c.get("approver_id", "")
+        app_id_key = str(app_id_raw).strip()
+        approver_data = users_map.get(app_id_key, {})
+        
+        if approver_data.get("name"):
+            approver_name = approver_data["name"]
+        else:
+             # Fallback for deleted users or missing IDs
+            approver_name = f"Unknown User ({app_id_raw})" if app_id_raw else ""
+        
+        writer.writerow([
+            u.get("employee_id", ""),
+            u.get("name", ""),
+            u.get("email", ""),
+            "COMP_OFF_GRANT",
+            c["work_date"],
+            c["work_date"],
+            "0 (Accrual)", # It's an accrual, not usage
+            c["status"],
+            approver_name
+        ])
+
+    output.seek(0)
+    
+    return StreamingResponse(
+        io.StringIO(output.getvalue()),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=leave_report_{start_date}_{end_date}.csv"}
+    )

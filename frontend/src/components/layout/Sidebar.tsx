@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -10,11 +11,13 @@ import {
     Users,
     LogOut,
     CheckSquare,
-    ChevronsUpDown,
+    ChevronLeft,
+    ChevronRight,
     Sun,
     Moon,
     Laptop,
-    Settings
+    Settings,
+    FileSpreadsheet
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -49,6 +52,7 @@ export default function Sidebar({ className }: SidebarProps) {
     const router = useRouter();
     const { user, logout } = useAuth();
     const { setTheme } = useTheme();
+    const [isExpanded, setIsExpanded] = useState(false);
 
     if (!user) return null;
 
@@ -104,62 +108,93 @@ export default function Sidebar({ className }: SidebarProps) {
             href: '/dashboard/admin/holidays',
             icon: Calendar,
             roles: ['admin', 'hr', 'founder']
+        },
+        {
+            title: 'Leave Reports',
+            href: '/dashboard/admin/export',
+            icon: FileSpreadsheet,
+            roles: ['admin', 'hr', 'founder']
         }
     ];
 
 
     return (
         <TooltipProvider>
-            <div className={cn("pb-12 min-h-screen w-[70px] bg-slate-900 text-white flex flex-col z-50", className)}>
-                <div className="space-y-4 py-4 flex flex-col h-full items-center">
-                    <div className="py-2 flex items-center justify-center h-12 mb-2 w-full">
+            <div
+                className={cn(
+                    "pb-12 min-h-screen bg-slate-900 text-white flex flex-col z-50 transition-all duration-300 ease-in-out",
+                    isExpanded ? "w-64" : "w-[70px]",
+                    className
+                )}
+            >
+                <div className="space-y-4 py-4 flex flex-col h-full">
+                    <div className={cn("py-2 flex items-center h-12 mb-2 w-full px-4", isExpanded ? "justify-between" : "justify-center")}>
                         {/* Logo / Title */}
-                        <div className="font-bold text-xl">LMS</div>
+                        <div className={cn("font-bold text-xl transition-all duration-300", isExpanded ? "opacity-100" : "opacity-100")}>
+                            {isExpanded ? "Leave Management" : "LMS"}
+                        </div>
                     </div>
 
-                    <div className="w-full px-2 flex-1 flex flex-col items-center gap-2">
-                        {navItems.map((item) => (
-                            <Tooltip key={item.href} delayDuration={0}>
-                                <TooltipTrigger asChild>
-                                    <Link href={item.href} className="w-full flex justify-center">
-                                        <Button
-                                            variant="ghost"
-                                            className={cn(
-                                                "h-10 w-10 p-0 rounded-md",
-                                                (item.exact ? pathname === item.href : pathname.startsWith(item.href))
-                                                    ? "bg-blue-600 text-white hover:bg-blue-700"
-                                                    : "text-slate-300 hover:text-white hover:bg-slate-800"
-                                            )}
-                                        >
-                                            <item.icon className="h-5 w-5" />
-                                        </Button>
-                                    </Link>
-                                </TooltipTrigger>
-                                <TooltipContent side="right">
-                                    <p>{item.title}</p>
-                                </TooltipContent>
-                            </Tooltip>
-                        ))}
+                    <div className="w-full px-2 flex-1 flex flex-col gap-2">
+                        {navItems.map((item) => {
+                            const btn = (
+                                <Link href={item.href} className="w-full">
+                                    <Button
+                                        variant="ghost"
+                                        className={cn(
+                                            "w-full rounded-md transition-all duration-200",
+                                            isExpanded ? "justify-start px-3" : "justify-center px-0 w-10 mx-auto",
+                                            (item.exact ? pathname === item.href : pathname.startsWith(item.href))
+                                                ? "bg-blue-600 text-white hover:bg-blue-700"
+                                                : "text-slate-300 hover:text-white hover:bg-slate-800"
+                                        )}
+                                    >
+                                        <item.icon className={cn("h-5 w-5", isExpanded && "mr-3")} />
+                                        {isExpanded && <span className="truncate">{item.title}</span>}
+                                    </Button>
+                                </Link>
+                            );
 
-                        {/* Separator if needed */}
-                        <div className="h-px w-8 bg-slate-700 my-2" />
+                            if (isExpanded) return <div key={item.href} className="w-full">{btn}</div>;
+
+                            return (
+                                <Tooltip key={item.href} delayDuration={0}>
+                                    <TooltipTrigger asChild>
+                                        {btn}
+                                    </TooltipTrigger>
+                                    <TooltipContent side="right">
+                                        <p>{item.title}</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            );
+                        })}
+
+                        <div className="h-px w-full bg-slate-700 my-2 opacity-50" />
 
                         {managerLinks.map((item) => {
                             if (!item.roles.includes(user.role)) return null;
+                            const btn = (
+                                <Link href={item.href} className="w-full">
+                                    <Button
+                                        variant="ghost"
+                                        className={cn(
+                                            "w-full rounded-md transition-all duration-200",
+                                            isExpanded ? "justify-start px-3" : "justify-center px-0 w-10 mx-auto",
+                                            isActive(item.href) ? "bg-blue-600 text-white hover:bg-blue-700" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                                        )}
+                                    >
+                                        <item.icon className={cn("h-5 w-5", isExpanded && "mr-3")} />
+                                        {isExpanded && <span className="truncate">{item.title}</span>}
+                                    </Button>
+                                </Link>
+                            );
+
+                            if (isExpanded) return <div key={item.href} className="w-full">{btn}</div>;
+
                             return (
                                 <Tooltip key={item.href} delayDuration={0}>
                                     <TooltipTrigger asChild>
-                                        <Link href={item.href} className="w-full flex justify-center">
-                                            <Button
-                                                variant="ghost"
-                                                className={cn(
-                                                    "h-10 w-10 p-0 rounded-md",
-                                                    isActive(item.href) ? "bg-blue-600 text-white hover:bg-blue-700" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                                                )}
-                                            >
-                                                <item.icon className="h-5 w-5" />
-                                            </Button>
-                                        </Link>
+                                        {btn}
                                     </TooltipTrigger>
                                     <TooltipContent side="right">
                                         <p>{item.title}</p>
@@ -167,22 +202,31 @@ export default function Sidebar({ className }: SidebarProps) {
                                 </Tooltip>
                             );
                         })}
+
                         {adminLinks.map((item) => {
                             if (!item.roles.includes(user.role)) return null;
+                            const btn = (
+                                <Link href={item.href} className="w-full">
+                                    <Button
+                                        variant="ghost"
+                                        className={cn(
+                                            "w-full rounded-md transition-all duration-200",
+                                            isExpanded ? "justify-start px-3" : "justify-center px-0 w-10 mx-auto",
+                                            isActive(item.href) ? "bg-blue-600 text-white hover:bg-blue-700" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                                        )}
+                                    >
+                                        <item.icon className={cn("h-5 w-5", isExpanded && "mr-3")} />
+                                        {isExpanded && <span className="truncate">{item.title}</span>}
+                                    </Button>
+                                </Link>
+                            );
+
+                            if (isExpanded) return <div key={item.href} className="w-full">{btn}</div>;
+
                             return (
                                 <Tooltip key={item.href} delayDuration={0}>
                                     <TooltipTrigger asChild>
-                                        <Link href={item.href} className="w-full flex justify-center">
-                                            <Button
-                                                variant="ghost"
-                                                className={cn(
-                                                    "h-10 w-10 p-0 rounded-md",
-                                                    isActive(item.href) ? "bg-blue-600 text-white hover:bg-blue-700" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                                                )}
-                                            >
-                                                <item.icon className="h-5 w-5" />
-                                            </Button>
-                                        </Link>
+                                        {btn}
                                     </TooltipTrigger>
                                     <TooltipContent side="right">
                                         <p>{item.title}</p>
@@ -192,74 +236,107 @@ export default function Sidebar({ className }: SidebarProps) {
                         })}
                     </div>
 
-                    <div className="px-2 pb-4 mt-auto w-full flex flex-col items-center gap-4">
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" className="h-10 w-10 p-0 rounded-full hover:bg-slate-800 ring-2 ring-transparent hover:ring-slate-600">
-                                    <Avatar className="h-8 w-8 border border-slate-600">
-                                        <AvatarImage src="" />
-                                        <AvatarFallback className="bg-slate-700 text-slate-200 text-xs">
-                                            {user.full_name?.charAt(0) || 'U'}
-                                        </AvatarFallback>
-                                    </Avatar>
-                                </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="w-56" align="start" side="right" sideOffset={10} forceMount>
-                                <DropdownMenuLabel>
-                                    <div className="flex flex-col">
-                                        <span>{user.full_name}</span>
-                                        <span className="text-xs font-normal text-slate-500 capitalize">{user.role}</span>
-                                    </div>
-                                </DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
-                                    <User className="mr-2 h-4 w-4" />
-                                    Profile
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push('/dashboard/settings')}>
-                                    <Settings className="mr-2 h-4 w-4" />
-                                    Settings
-                                </DropdownMenuItem>
-                                <DropdownMenuSub>
-                                    <DropdownMenuSubTrigger>
-                                        <Sun className="mr-2 h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-                                        <Moon className="absolute mr-2 h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-                                        <span className="ml-2">Theme</span>
-                                    </DropdownMenuSubTrigger>
-                                    <DropdownMenuPortal>
-                                        <DropdownMenuSubContent>
-                                            <DropdownMenuItem onClick={() => setTheme("light")}>
-                                                <Sun className="mr-2 h-4 w-4" />
-                                                Light
-                                            </DropdownMenuItem>
-                                            <DropdownMenuItem onClick={() => setTheme("dark")}>
-                                                <Moon className="mr-2 h-4 w-4" />
-                                                Dark
-                                            </DropdownMenuItem>
-                                            <DropdownMenuItem onClick={() => setTheme("system")}>
-                                                <Laptop className="mr-2 h-4 w-4" />
-                                                System
-                                            </DropdownMenuItem>
-                                        </DropdownMenuSubContent>
-                                    </DropdownMenuPortal>
-                                </DropdownMenuSub>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
+                    <div className="px-2 pb-4 mt-auto w-full flex flex-col gap-2">
+                        {/* Collapse Toggle */}
+                        <Button
+                            variant="ghost"
+                            onClick={() => setIsExpanded(!isExpanded)}
+                            className={cn(
+                                "text-slate-400 hover:text-white hover:bg-slate-800 mb-2",
+                                isExpanded ? "w-full justify-start px-3" : "w-10 p-0 mx-auto"
+                            )}
+                        >
+                            {isExpanded ? <ChevronLeft className="h-5 w-5 mr-3" /> : <ChevronRight className="h-5 w-5" />}
+                            {isExpanded && <span>Collapse</span>}
+                        </Button>
 
-                        <Tooltip delayDuration={0}>
-                            <TooltipTrigger asChild>
+                        <div className={cn("flex items-center", isExpanded ? "justify-between px-2 bg-slate-800/50 rounded-lg p-2" : "flex-col gap-4")}>
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" className="h-10 w-10 p-0 rounded-full hover:bg-slate-800 ring-2 ring-transparent hover:ring-slate-600 shrink-0">
+                                        <Avatar className="h-8 w-8 border border-slate-600">
+                                            <AvatarImage src="" />
+                                            <AvatarFallback className="bg-slate-700 text-slate-200 text-xs">
+                                                {user.full_name?.charAt(0) || 'U'}
+                                            </AvatarFallback>
+                                        </Avatar>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent className="w-56" align={isExpanded ? "end" : "start"} side="right" sideOffset={10} forceMount>
+                                    <DropdownMenuLabel>
+                                        <div className="flex flex-col">
+                                            <span>{user.full_name}</span>
+                                            <span className="text-xs font-normal text-slate-500 capitalize">{user.role}</span>
+                                        </div>
+                                    </DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
+                                        <User className="mr-2 h-4 w-4" />
+                                        Profile
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => router.push('/dashboard/settings')}>
+                                        <Settings className="mr-2 h-4 w-4" />
+                                        Settings
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger>
+                                            <Sun className="mr-2 h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+                                            <Moon className="absolute mr-2 h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+                                            <span className="ml-2">Theme</span>
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuPortal>
+                                            <DropdownMenuSubContent>
+                                                <DropdownMenuItem onClick={() => setTheme("light")}>
+                                                    <Sun className="mr-2 h-4 w-4" />
+                                                    Light
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => setTheme("dark")}>
+                                                    <Moon className="mr-2 h-4 w-4" />
+                                                    Dark
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => setTheme("system")}>
+                                                    <Laptop className="mr-2 h-4 w-4" />
+                                                    System
+                                                </DropdownMenuItem>
+                                            </DropdownMenuSubContent>
+                                        </DropdownMenuPortal>
+                                    </DropdownMenuSub>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+
+                            {isExpanded && (
+                                <div className="flex flex-col overflow-hidden">
+                                    <span className="text-sm font-medium truncate">{user.full_name?.split(' ')[0]}</span>
+                                    <span className="text-xs text-slate-400 truncate capitalize">{user.role}</span>
+                                </div>
+                            )}
+
+                            {isExpanded ? (
                                 <Button
                                     variant="ghost"
                                     onClick={logout}
-                                    className="h-10 w-10 p-0 rounded-md text-red-400 hover:text-red-500 hover:bg-slate-800"
+                                    className="w-full rounded-md text-red-400 hover:text-red-500 hover:bg-slate-900/50 justify-start px-3 transition-all duration-200"
                                 >
-                                    <LogOut className="h-5 w-5" />
+                                    <LogOut className="h-5 w-5 mr-3" />
+                                    <span className="truncate">Log out</span>
                                 </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="right">
-                                <p>Log out</p>
-                            </TooltipContent>
-                        </Tooltip>
+                            ) : (
+                                <Tooltip delayDuration={0}>
+                                    <TooltipTrigger asChild>
+                                        <Button
+                                            variant="ghost"
+                                            onClick={logout}
+                                            className="h-9 w-9 p-0 rounded-md text-red-400 hover:text-red-500 hover:bg-slate-800 shrink-0"
+                                        >
+                                            <LogOut className="h-4 w-4" />
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="right">
+                                        <p>Log out</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
