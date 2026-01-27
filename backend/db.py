@@ -17,9 +17,7 @@ import aiomysql  # type: ignore
 
 load_dotenv()
 
-# ============================================================================
 # Database Configuration
-# ============================================================================
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
@@ -29,10 +27,7 @@ MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4")
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
 # SQLAlchemy Setup (Primary - Recommended)
-# ============================================================================
-
 # SQLAlchemy database URL
 DATABASE_URL = f"mysql+aiomysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
 
@@ -160,11 +155,6 @@ async def get_cursor():
         logger.error(f"Failed to get database cursor: {str(e)}")
         raise
 
-
-# ============================================================================
-# Legacy Helper Functions (For Backward Compatibility)
-# ============================================================================
-
 async def execute_query(query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
     """
     Execute a SELECT query and return results as list of dictionaries (legacy).
@@ -173,56 +163,3 @@ async def execute_query(query: str, params: Optional[tuple] = None) -> List[Dict
     async with get_cursor() as cursor:
         await cursor.execute(query, params)
         return await cursor.fetchall()
-
-
-async def execute_one(query: str, params: Optional[tuple] = None) -> Optional[Dict[str, Any]]:
-    """
-    Execute a SELECT query and return first result as dictionary (legacy).
-    Use SQLAlchemy select() instead.
-    """
-    try:
-        async with get_cursor() as cursor:
-            await cursor.execute(query, params)
-            return await cursor.fetchone()
-    except Exception as e:
-        logger.error(f"Database query error: {str(e)}, Query: {query}, Params: {params}")
-        raise
-
-
-async def execute_insert(query: str, params: Optional[tuple] = None) -> int:
-    """
-    Execute an INSERT query and return the last insert ID (legacy).
-    Use SQLAlchemy session.add() instead.
-    """
-    async with get_connection() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute(query, params)
-            return cursor.lastrowid
-
-
-async def execute_update(query: str, params: Optional[tuple] = None) -> int:
-    """
-    Execute an UPDATE or DELETE query and return affected rows (legacy).
-    Use SQLAlchemy session.update() instead.
-    """
-    async with get_cursor() as cursor:
-        await cursor.execute(query, params)
-        return cursor.rowcount
-
-
-async def execute_many(query: str, params_list: List[tuple]) -> int:
-    """
-    Execute a query multiple times with different parameters (legacy).
-    Use SQLAlchemy bulk operations instead.
-    """
-    async with get_cursor() as cursor:
-        return await cursor.executemany(query, params_list)
-
-
-async def create_indexes():
-    """
-    Create indexes in MySQL.
-    Note: Indexes are now managed by SQLAlchemy models.
-    """
-    logger.info("MySQL indexes are managed via SQLAlchemy models")
-    pass

@@ -89,14 +89,7 @@ class UserDocument(Base):
         Index("idx_uploaded_at", "uploaded_at"),
     )
 
-
-# ============================================================================
 # Pydantic Models (for API request/response)
-# ============================================================================
-
-
-
-
 class UserRole(str, Enum):
     """User role enum"""
     EMPLOYEE = "employee"

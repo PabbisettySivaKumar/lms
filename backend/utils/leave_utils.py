@@ -14,6 +14,9 @@ from backend.models.user import UserRole
 from backend.models import UserSchema
 from sqlalchemy import select, and_, or_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
+from fastapi import HTTPException
+from backend.utils.id_utils import to_int_id
+from backend.db import AsyncSessionLocal
 
 
 # Balance field mapping for leave types
@@ -80,9 +83,6 @@ async def check_leave_overlap(
     Check if a new leave request overlaps with existing active leaves.
     Raises HTTPException if overlap is found.
     """
-    from fastapi import HTTPException
-    from backend.utils.id_utils import to_int_id
-    
     # Convert string dates to date objects for comparison
     new_start_date = date.fromisoformat(new_start) if isinstance(new_start, str) else new_start
     new_end_date = date.fromisoformat(new_end) if (new_end and isinstance(new_end, str)) else (new_end if new_end else None)
@@ -194,8 +194,7 @@ async def update_user_balance(
     Update user balance for a leave type.
     Optimized to use single update operation.
     """
-    from backend.utils.id_utils import to_int_id
-    from backend.db import AsyncSessionLocal
+    
     
     balance_field = get_balance_field(leave_type)
     if not balance_field:
