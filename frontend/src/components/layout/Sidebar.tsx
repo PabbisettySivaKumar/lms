@@ -172,7 +172,7 @@ export default function Sidebar({ className }: SidebarProps) {
                         <div className="h-px w-full bg-slate-700 my-2 opacity-50" />
 
                         {managerLinks.map((item) => {
-                            if (!item.roles.includes(user.role)) return null;
+                            if (!item.roles.includes(user.role?.toLowerCase())) return null;
                             const btn = (
                                 <Link href={item.href} className="w-full">
                                     <Button
@@ -204,7 +204,7 @@ export default function Sidebar({ className }: SidebarProps) {
                         })}
 
                         {adminLinks.map((item) => {
-                            if (!item.roles.includes(user.role)) return null;
+                            if (!item.roles.includes(user.role?.toLowerCase())) return null;
                             const btn = (
                                 <Link href={item.href} className="w-full">
                                     <Button

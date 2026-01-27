@@ -2,13 +2,14 @@ import { create } from 'zustand';
 import api from '@/lib/axios';
 
 interface User {
-    id: string; // mapped from _id
+    id: number | string; // Backend returns integer, support both for compatibility
+    _id?: string; // Backward compatibility
     email: string;
     full_name: string;
     role: string;
     is_active: boolean;
     joining_date?: string;
-    manager_id?: string;
+    manager_id?: number | string; // Can be integer or string
     manager_name?: string;
     casual_balance: number;
     sick_balance: number;
@@ -66,22 +67,60 @@ export const useAuth = create<AuthState>((set, get) => ({
     login: async ({ email, password }) => {
         set({ isLoading: true });
         try {
-            // Use URLSearchParams for application/x-www-form-urlencoded
-            const params = new URLSearchParams();
-            params.append('username', email);
-            params.append('password', password);
+            // Create form data for OAuth2PasswordRequestForm
+            const formData = new URLSearchParams();
+            formData.append('username', email);
+            formData.append('password', password);
 
-            const response = await api.post<LoginResponse>('/auth/login', params, {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            });
+            // Send as form-encoded data
+            const response = await api.post<LoginResponse>(
+                '/auth/login',
+                formData.toString(),
+                {
+                    headers: { 
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                }
+            );
 
             const { access_token, reset_required } = response.data;
             localStorage.setItem('access_token', access_token);
             await get().fetchUser();
             return reset_required;
-        } catch (error) {
+        } catch (error: any) {
             set({ isLoading: false });
-            throw error;
+            // Log detailed error for debugging
+            if (error.response) {
+                // Log the raw error response for debugging
+                console.error('Raw error response:', error.response);
+                console.error('Error response data:', error.response.data);
+                console.error('Error response data type:', typeof error.response.data);
+                console.error('Error response data keys:', error.response.data ? Object.keys(error.response.data) : 'no keys');
+                
+                const errorData = error.response.data;
+                // Handle both object and string responses
+                let errorMessage = 'Login failed. Please check your credentials.';
+                
+                if (typeof errorData === 'string') {
+                    errorMessage = errorData;
+                } else if (errorData && typeof errorData === 'object') {
+                    errorMessage = errorData.detail || errorData.message || errorData.error || errorMessage;
+                }
+                
+                console.error('Login error response:', {
+                    status: error.response.status,
+                    statusText: error.response.statusText,
+                    data: errorData,
+                    message: errorMessage,
+                });
+                throw new Error(errorMessage);
+            } else if (error.request) {
+                console.error('Login error - no response:', error.request);
+                throw new Error('Network error. Please check your connection.');
+            } else {
+                console.error('Login error:', error.message);
+                throw new Error(error.message || 'Login failed. Please try again.');
+            }
         }
     },
 

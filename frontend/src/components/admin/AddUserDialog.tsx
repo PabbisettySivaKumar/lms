@@ -40,13 +40,11 @@ const addUserSchema = z.object({
     full_name: z.string().min(2, 'Name is required'),
     email: z.string().email('Invalid email'),
     employee_id: z.string().min(1, 'Employee ID is required'),
-    role: z.string(),
-    manager_id: z.string().optional(),
+    role: z.string().transform((val) => val?.toLowerCase() || 'employee'), // Transform to lowercase
+    manager_employee_id: z.string().optional(), // Backend expects manager_employee_id, not manager_id
     joining_date: z.date(),
     password: z.string().min(6, 'Password must be at least 6 characters'),
-    // Wait, previous instructions for POST /admin/users might accept a default. 
-    // Let's assume we need to set a default password or input one.
-    // I'll add a default "welcome123" logic or input. Let's add an input for safety.
+    employee_type: z.string().optional().default('Full-time'),
 });
 
 // Assuming POST /admin/users endpoint structure from previous context
@@ -80,14 +78,39 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
     });
 
     const selectedDate = watch('joining_date');
+    const selectedRole = watch('role');
 
     const onSubmit = async (data: UserFormValues) => {
         setLoading(true);
         try {
-            await api.post('/admin/users', {
-                ...data,
+            // Force role to lowercase - handle any case variations
+            const roleValue = String(data.role || selectedRole || 'employee').toLowerCase().trim();
+            
+            // Validate role is one of the allowed values
+            const allowedRoles = ['employee', 'manager', 'hr', 'admin', 'founder', 'intern', 'contract'];
+            if (!allowedRoles.includes(roleValue)) {
+                toast.error(`Invalid role: ${roleValue}. Please select a valid role.`);
+                setLoading(false);
+                return;
+            }
+            
+            // Prepare payload matching backend UserCreateAdmin model
+            const payload: any = {
+                full_name: data.full_name,
+                email: data.email,
+                employee_id: data.employee_id,
+                password: data.password,
+                role: roleValue, // Explicitly lowercase
                 joining_date: format(data.joining_date, 'yyyy-MM-dd'),
-            });
+                employee_type: data.employee_type || 'Full-time',
+            };
+            
+            // Only include manager_employee_id if a manager is selected
+            if (data.manager_employee_id && data.manager_employee_id !== 'none') {
+                payload.manager_employee_id = data.manager_employee_id;
+            }
+            
+            await api.post('/admin/users', payload);
 
             toast.success('User created successfully');
             queryClient.invalidateQueries({ queryKey: ['admin-users'] });
@@ -139,7 +162,13 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label>Role</Label>
-                            <Select onValueChange={(val) => setValue('role', val)} defaultValue="employee">
+                            <Select 
+                                value={selectedRole || 'employee'} 
+                                onValueChange={(val) => {
+                                    const lowerVal = val.toLowerCase();
+                                    setValue('role', lowerVal, { shouldValidate: true });
+                                }}
+                            >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Select role" />
                                 </SelectTrigger>
@@ -153,11 +182,12 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
                                     <SelectItem value="contract">Contract</SelectItem>
                                 </SelectContent>
                             </Select>
+                            {errors.role && <p className="text-red-500 text-xs">{errors.role.message}</p>}
                         </div>
 
                         <div className="space-y-2">
                             <Label>Manager (Optional)</Label>
-                            <Select onValueChange={(val) => setValue('manager_id', val === "none" ? undefined : val)}>
+                            <Select onValueChange={(val) => setValue('manager_employee_id', val === "none" ? undefined : val)}>
                                 <SelectTrigger>
                                     <SelectValue placeholder="Select manager" />
                                 </SelectTrigger>

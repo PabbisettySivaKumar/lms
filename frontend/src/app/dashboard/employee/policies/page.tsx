@@ -24,7 +24,8 @@ interface LeavePolicy {
     sick_leave_quota: number;
     wfh_quota: number;
     is_active: boolean;
-    _id?: string;
+    id?: number | string; // Backend returns integer, support both
+    _id?: string; // Backward compatibility
     document_url?: string;
     document_name?: string;
     documents?: Array<{
@@ -41,9 +42,21 @@ export default function EmployeePoliciesPage() {
     const { data: policy, isLoading, isError } = useQuery({
         queryKey: ['active-policy'],
         queryFn: async () => {
-            const res = await api.get<LeavePolicy>('/policies/active');
+            const res = await api.get<LeavePolicy>('/policies/active', {
+                headers: {
+                    'Cache-Control': 'no-cache',
+                },
+            });
+            // Debug: Log the response to see if documents are included
+            console.log('Active policy response:', res.data);
+            if (res.data?.documents) {
+                console.log('Documents in active policy:', res.data.documents);
+            }
             return res.data;
         },
+        staleTime: 0, // Always refetch to see latest documents
+        refetchOnWindowFocus: true,
+        refetchOnMount: true,
     });
 
     // Fetch Acknowledgment Status list
@@ -152,7 +165,7 @@ export default function EmployeePoliciesPage() {
                                     <CardFooter className="pt-4 border-t bg-slate-50/50 dark:bg-slate-900/20 flex flex-col gap-2">
                                         <Button className="w-full h-9 text-xs" variant="outline" asChild>
                                             <a
-                                                href={`${process.env.NEXT_PUBLIC_API_URL}${doc.url}`}
+                                                href={`/api${doc.url}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                             >
@@ -203,7 +216,7 @@ export default function EmployeePoliciesPage() {
                                 <CardFooter className="pt-4 border-t bg-slate-50/50 dark:bg-slate-900/20">
                                     <Button className="w-full" variant="outline" asChild>
                                         <a
-                                            href={`${process.env.NEXT_PUBLIC_API_URL}${policy.document_url}`}
+                                            href={`/api${policy.document_url}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                         >

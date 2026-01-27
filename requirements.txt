@@ -1,6 +1,8 @@
 fastapi
 uvicorn
-motor
+sqlalchemy[asyncio]
+aiomysql
+alembic
 pydantic[email]
 passlib[bcrypt]
 bcrypt==4.0.1
@@ -10,3 +12,4 @@ email-validator
 python-multipart
 APScheduler
 fastapi-mail
+httpx

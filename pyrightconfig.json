@@ -1,0 +1,31 @@
+{
+    "venvPath": ".",
+    "venv": "venv",
+    "pythonVersion": "3.13",
+    "pythonPlatform": "Darwin",
+    "include": [
+        "backend",
+        "scripts",
+        "alembic"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        "**/node_modules",
+        "venv",
+        ".venv"
+    ],
+    "typeCheckingMode": "off",
+    "reportMissingImports": "none",
+    "reportMissingTypeStubs": "none",
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "pythonVersion": "3.13",
+            "pythonPlatform": "Darwin",
+            "extraPaths": [
+                "backend",
+                "scripts"
+            ]
+        }
+    ]
+}

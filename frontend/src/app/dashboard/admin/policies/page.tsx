@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,31 +24,33 @@ import {
     DialogTitle,
     DialogDescription,
 } from '@/components/ui/dialog';
+import api from '@/lib/axios';
+import { useMutationWithToast } from '@/hooks/useMutationWithToast';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 interface LeavePolicy {
+    id?: number; // Backend returns integer ID
     year: number;
     casual_leave_quota: number;
     sick_leave_quota: number;
     wfh_quota: number;
     is_active: boolean;
-    _id?: string;
+    _id?: string; // Backward compatibility
     document_url?: string;
     document_name?: string;
     documents?: Array<{
+        id?: number;
+        policy_id?: number;
         name: string;
         url: string;
-        uploaded_at: string;
+        uploaded_at?: string;
     }>;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
 export default function PoliciesPage() {
-    const [policies, setPolicies] = useState<LeavePolicy[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [isSaving, setIsSaving] = useState(false);
-    const [isUploading, setIsUploading] = useState(false);
-
+    const queryClient = useQueryClient();
+    
     // Form State
     const [year, setYear] = useState<number>(new Date().getFullYear());
     const [casualQuota, setCasualQuota] = useState<number>(12);
@@ -59,176 +62,180 @@ export default function PoliciesPage() {
 
     // Report State
     const [reportYear, setReportYear] = useState<number | null>(null);
-    const [ackReport, setAckReport] = useState<any[]>([]);
-    const [isReportLoading, setIsReportLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
-    useEffect(() => {
-        fetchPolicies();
-    }, []);
-
-    const fetchPolicies = async () => {
-        try {
-            const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/policies/`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setPolicies(data);
+    // Fetch policies using React Query
+    const { data: policies = [], isLoading } = useQuery<LeavePolicy[]>({
+        queryKey: ['policies'],
+        queryFn: async () => {
+            try {
+                const response = await api.get('/policies/', {
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                    },
+                });
+                // Debug: Log the response to see if documents are included
+                console.log('Policies response:', response.data);
+                if (response.data && response.data.length > 0) {
+                    console.log('First policy documents:', response.data[0]?.documents);
+                }
+                return response.data;
+            } catch (error: any) {
+                // If 401, the axios interceptor will handle logout
+                // But log for debugging
+                console.error('Error fetching policies:', error.response?.status, error.response?.data);
+                throw error;
             }
-        } catch (error) {
-            console.error("Failed to fetch policies", error);
-        } finally {
-            setIsLoading(false);
-        }
-    };
+        },
+        staleTime: 0, // Always refetch to see latest documents
+        refetchOnWindowFocus: true,
+        refetchOnMount: true,
+        retry: false, // Don't retry on auth errors
+    });
 
-    const fetchAckReport = async (year: number) => {
+    // Fetch acknowledgment report using React Query
+    const { data: ackReport = [], isLoading: isReportLoading } = useQuery<any[]>({
+        queryKey: ['policies-report', reportYear],
+        queryFn: async () => {
+            if (!reportYear) return [];
+            const response = await api.get(`/policies/${reportYear}/report`);
+            return response.data;
+        },
+        enabled: !!reportYear, // Only fetch when reportYear is set
+        staleTime: 2 * 60 * 1000, // 2 minutes
+    });
+
+    const fetchAckReport = (year: number) => {
         setReportYear(year);
-        setIsReportLoading(true);
-        try {
-            const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/policies/${year}/report`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setAckReport(data);
-            }
-        } catch (error) {
-            toast.error("Failed to fetch acknowledgment report");
-        } finally {
-            setIsReportLoading(false);
-        }
     };
+
+    // Save policy mutation
+    const savePolicyMutation = useMutationWithToast({
+        mutationFn: async (data: {
+            year: number;
+            casual_leave_quota: number;
+            sick_leave_quota: number;
+            wfh_quota: number;
+        }) => {
+            const response = await api.post('/policies/', {
+                ...data,
+                is_active: true
+            });
+            return response.data;
+        },
+        successMessage: `Policy quotas for ${year} saved.`,
+        errorMessage: "Failed to save policy",
+        invalidateQueries: ['policies'],
+    });
 
     const handleSavePolicy = async (e: React.FormEvent) => {
         e.preventDefault();
-        setIsSaving(true);
-
-        try {
-            const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/policies/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    year: year,
-                    casual_leave_quota: casualQuota,
-                    sick_leave_quota: sickQuota,
-                    wfh_quota: wfhQuota,
-                    is_active: true
-                })
-            });
-
-            if (!res.ok) {
-                throw new Error('Failed to save policy');
-            }
-
-            toast.success(`Policy quotas for ${year} saved.`);
-            await fetchPolicies();
-        } catch (error: any) {
-            toast.error("Failed to save policy");
-        } finally {
-            setIsSaving(false);
-        }
+        savePolicyMutation.mutate({
+            year,
+            casual_leave_quota: casualQuota,
+            sick_leave_quota: sickQuota,
+            wfh_quota: wfhQuota,
+        });
     };
 
-    const handleUploadDocument = async () => {
-        if (selectedFiles.length === 0) return;
-
-        setIsUploading(true);
-        try {
-            const token = localStorage.getItem('access_token');
-
+    // Upload document mutation
+    const uploadDocumentMutation = useMutationWithToast({
+        mutationFn: async (data: { files: File[]; year: number; docName?: string }) => {
             // Upload files sequentially
-            for (const file of selectedFiles) {
+            for (const file of data.files) {
                 const formData = new FormData();
                 formData.append('file', file);
 
-                const url = new URL(`${API_URL}/policies/${year}/document`);
-                // If only one file is selected, use the custom label if provided
-                if (selectedFiles.length === 1 && docName) {
-                    url.searchParams.append('name', docName);
+                let url = `/policies/${data.year}/document`;
+                if (data.files.length === 1 && data.docName) {
+                    url += `?name=${encodeURIComponent(data.docName)}`;
                 }
 
-                const res = await fetch(url.toString(), {
-                    method: 'POST',
+                await api.post(url, formData, {
                     headers: {
-                        'Authorization': `Bearer ${token}`
+                        'Content-Type': 'multipart/form-data',
                     },
-                    body: formData
                 });
-
-                if (!res.ok) {
-                    throw new Error(`Failed to upload ${file.name}`);
-                }
             }
-
-            toast.success(`${selectedFiles.length} document(s) uploaded successfully`);
-            await fetchPolicies();
+            return { success: true };
+        },
+        successMessage: (_, variables) => `${variables.files.length} document(s) uploaded successfully`,
+        errorMessage: "Failed to upload document",
+        invalidateQueries: ['policies'],
+        onSuccess: async () => {
             setSelectedFiles([]);
             setDocName('');
-        } catch (error: any) {
-            toast.error(error.message || "Failed to upload document");
-        } finally {
-            setIsUploading(false);
-        }
+            // Force refetch policies to show the new document immediately
+            // Add a small delay to ensure backend commit is complete
+            await new Promise(resolve => setTimeout(resolve, 500));
+            // Invalidate and refetch
+            queryClient.invalidateQueries({ queryKey: ['policies'] });
+            // Also explicitly refetch
+            await queryClient.refetchQueries({ 
+                queryKey: ['policies'],
+                type: 'active',
+                exact: false
+            });
+        },
+    });
+
+    const handleUploadDocument = async () => {
+        if (selectedFiles.length === 0) return;
+        uploadDocumentMutation.mutate({
+            files: selectedFiles,
+            year,
+            docName: selectedFiles.length === 1 ? docName : undefined,
+        });
     };
+
+    // Delete document mutation
+    const deleteDocumentMutation = useMutationWithToast({
+        mutationFn: async (data: { policyYear: number; docUrl: string }) => {
+            await api.delete(`/policies/${data.policyYear}/document?url=${encodeURIComponent(data.docUrl)}`);
+            return { success: true };
+        },
+        successMessage: "Document deleted",
+        errorMessage: "Failed to delete document",
+        invalidateQueries: ['policies'],
+    });
 
     const handleDeleteDocument = async (policyYear: number, docUrl: string) => {
-        if (!confirm("Are you sure you want to delete this document?")) return;
+        deleteDocumentMutation.mutate({ policyYear, docUrl });
+    };
 
-        try {
-            const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/policies/${policyYear}/document?url=${encodeURIComponent(docUrl)}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+    // Delete policy mutation
+    const deletePolicyMutation = useMutationWithToast({
+        mutationFn: async (year: number) => {
+            await api.delete(`/policies/${year}`);
+            return { success: true };
+        },
+        successMessage: (_, year) => `Policy for ${year} deleted`,
+        errorMessage: "Failed to delete policy",
+        invalidateQueries: ['policies'],
+    });
 
-            if (!res.ok) {
-                throw new Error("Failed to delete document");
-            }
+    const [policyToDelete, setPolicyToDelete] = useState<number | null>(null);
 
-            toast.success("Document deleted");
-            await fetchPolicies();
-        } catch (error: any) {
-            toast.error(error.message || "Failed to delete document");
+    const handleDeletePolicy = (year: number) => {
+        setPolicyToDelete(year);
+    };
+
+    const confirmDeletePolicy = () => {
+        if (policyToDelete !== null) {
+            deletePolicyMutation.mutate(policyToDelete);
+            setPolicyToDelete(null);
         }
     };
 
-    const handleDeletePolicy = async (year: number) => {
-        if (!confirm(`Are you sure you want to delete the entire policy for ${year}? This will also delete all associated documents.`)) return;
-
-        try {
-            const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/policies/${year}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            if (!res.ok) {
-                throw new Error("Failed to delete policy");
-            }
-
-            toast.success(`Policy for ${year} deleted`);
-            await fetchPolicies();
-        } catch (error: any) {
-            toast.error(error.message || "Failed to delete policy");
-        }
-    };
-
-    const filteredReport = ackReport.filter(r =>
-        r.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.email?.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    // Memoized filtered report for performance
+    const filteredReport = useMemo(() => {
+        if (!searchQuery) return ackReport;
+        const query = searchQuery.toLowerCase();
+        return ackReport.filter(r =>
+            r.full_name?.toLowerCase().includes(query) ||
+            r.email?.toLowerCase().includes(query)
+        );
+    }, [ackReport, searchQuery]);
 
     return (
         <div className="space-y-6">
@@ -312,10 +319,10 @@ export default function PoliciesPage() {
                                     </div>
                                 </div>
 
-                                <Button type="submit" disabled={isSaving} className="w-full">
-                                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                                    Save Policy
-                                </Button>
+                        <Button type="submit" disabled={savePolicyMutation.isPending} className="w-full">
+                            {savePolicyMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                            Save Policy
+                        </Button>
                             </form>
                         </CardContent>
                     </Card>
@@ -372,11 +379,11 @@ export default function PoliciesPage() {
                             )}
                             <Button
                                 onClick={handleUploadDocument}
-                                disabled={isUploading || selectedFiles.length === 0}
+                                disabled={uploadDocumentMutation.isPending || selectedFiles.length === 0}
                                 variant="secondary"
                                 className="w-full"
                             >
-                                {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                                {uploadDocumentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
                                 {selectedFiles.length > 1 ? `Upload ${selectedFiles.length} Documents` : 'Upload Document'}
                             </Button>
                         </CardContent>
@@ -407,7 +414,7 @@ export default function PoliciesPage() {
                                     </TableHeader>
                                     <TableBody>
                                         {policies.map((policy) => (
-                                            <TableRow key={policy._id} className="group">
+                                            <TableRow key={policy.id ?? policy.year} className="group">
                                                 <TableCell className="font-medium align-top">
                                                     <div className="flex items-center">
                                                         {policy.year}
@@ -438,6 +445,7 @@ export default function PoliciesPage() {
                                                             variant="ghost"
                                                             size="sm"
                                                             onClick={() => handleDeletePolicy(policy.year)}
+                                                            disabled={deletePolicyMutation.isPending}
                                                             className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
                                                             title="Delete Policy"
                                                         >
@@ -460,7 +468,7 @@ export default function PoliciesPage() {
                         </CardHeader>
                         <CardContent>
                             {isLoading ? (
-                                <div className="flex justify-center p-4"><Loader2 className="animate-spin" /></div>
+                                <div className="flex justify-center p-4"><LoadingSpinner /></div>
                             ) : policies.length === 0 ? (
                                 <p className="text-center text-slate-500 py-4">No policies found.</p>
                             ) : (
@@ -473,17 +481,17 @@ export default function PoliciesPage() {
                                     </TableHeader>
                                     <TableBody>
                                         {policies.map((policy) => (
-                                            <TableRow key={`doc-${policy._id}`}>
+                                            <TableRow key={`doc-${policy.id ?? policy.year}`}>
                                                 <TableCell className="font-medium align-top">
                                                     {policy.year}
                                                 </TableCell>
                                                 <TableCell className="align-top">
                                                     <div className="space-y-2">
-                                                        {policy.documents && policy.documents.length > 0 ? (
+                                                        {policy.documents && Array.isArray(policy.documents) && policy.documents.length > 0 ? (
                                                             policy.documents.map((doc, idx) => (
-                                                                <div key={idx} className="flex items-center justify-between group">
+                                                                <div key={doc.id || doc.url || idx} className="flex items-center justify-between group">
                                                                     <a
-                                                                        href={`${API_URL}${doc.url}`}
+                                                                        href={`/api${doc.url}`}
                                                                         target="_blank"
                                                                         rel="noopener noreferrer"
                                                                         className="inline-flex items-center text-blue-600 hover:underline text-sm"
@@ -495,6 +503,7 @@ export default function PoliciesPage() {
                                                                         variant="ghost"
                                                                         size="sm"
                                                                         onClick={() => handleDeleteDocument(policy.year, doc.url)}
+                                                                        disabled={deleteDocumentMutation.isPending}
                                                                         className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
                                                                     >
                                                                         <Trash2 className="h-4 w-4" />
@@ -505,7 +514,7 @@ export default function PoliciesPage() {
                                                             // Fallback for legacy items not yet migrated to documents list
                                                             <div className="flex items-center justify-between group">
                                                                 <a
-                                                                    href={`${API_URL}${policy.document_url}`}
+                                                                    href={`/api${policy.document_url}`}
                                                                     target="_blank"
                                                                     rel="noopener noreferrer"
                                                                     className="inline-flex items-center text-blue-600 hover:underline text-sm"
@@ -643,6 +652,18 @@ export default function PoliciesPage() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            {/* Delete Policy Confirmation Dialog */}
+            <ConfirmDialog
+                open={policyToDelete !== null}
+                onOpenChange={(open) => !open && setPolicyToDelete(null)}
+                onConfirm={confirmDeletePolicy}
+                title="Delete Policy"
+                description={`Are you sure you want to delete the entire policy for ${policyToDelete}? This will also delete all associated documents.`}
+                confirmText="Delete"
+                variant="destructive"
+                isLoading={deletePolicyMutation.isPending}
+            />
         </div>
     );
 }

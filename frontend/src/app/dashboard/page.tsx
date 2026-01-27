@@ -74,16 +74,16 @@ export default function DashboardPage() {
 
       {/* Section 1: Balances */}
       <div className="grid gap-6 md:grid-cols-4">
-        {/* Casual Leave - Teal Gradient */}
+        {/* Casual/Earned Leave - Teal Gradient */}
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900/20 dark:to-teal-900/10 shadow-sm transition-all hover:shadow-md">
           <div className="absolute top-0 right-0 p-4 opacity-10">
             <UserCircle className="h-24 w-24 text-teal-600" />
           </div>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 z-10">
-            <CardTitle className="text-sm font-semibold text-teal-700 dark:text-teal-300">Casual Leave</CardTitle>
+            <CardTitle className="text-sm font-semibold text-teal-700 dark:text-teal-300">Casual/Earned Leave</CardTitle>
           </CardHeader>
           <CardContent className="z-10">
-            <div className="text-4xl font-bold text-teal-900 dark:text-teal-100">{user.casual_balance}</div>
+            <div className="text-4xl font-bold text-teal-900 dark:text-teal-100">{(user.casual_balance || 0) + (user.earned_balance || 0)}</div>
             <p className="text-xs font-medium text-teal-600/80 dark:text-teal-400 mt-1">Available days</p>
           </CardContent>
         </Card>
@@ -172,7 +172,7 @@ function HolidayWidget() {
             <p className="text-sm text-slate-500">No holidays found for this year.</p>
           )}
           {filteredHolidays.map((h: any) => (
-            <div key={h._id || h.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 last:border-0 last:pb-0">
+            <div key={h.id} className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 last:border-0 last:pb-0">
               <div className="space-y-1">
                 <p className="text-sm font-medium leading-none text-slate-900 dark:text-slate-100">{h.name}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">

@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { formatLeaveType } from '@/lib/leaveUtils';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -30,11 +31,12 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface LeaveRequest {
-  id: string;
+  id: number | string; // Backend returns integer, support both
+  _id?: string; // Backward compatibility
   applicant_name: string;
   type: string;
   start_date: string;
-  end_date: string;
+  end_date: string | null;
   deductible_days: number;
   reason: string;
 }
@@ -45,7 +47,7 @@ export default function TeamPage() {
   const queryClient = useQueryClient();
 
   // Dialog State
-  const [rejectDialog, setRejectDialog] = useState<{ isOpen: boolean; id: string | null }>({
+  const [rejectDialog, setRejectDialog] = useState<{ isOpen: boolean; id: number | string | null }>({
     isOpen: false,
     id: null,
   });
@@ -74,8 +76,9 @@ export default function TeamPage() {
 
   // Actions
   const actionMutation = useMutation({
-    mutationFn: async ({ id, action, note }: { id: string; action: 'APPROVE' | 'REJECT'; note?: string }) => {
-      await api.patch(`/leaves/action/${id}`, null, {
+    mutationFn: async ({ id, action, note }: { id: number | string; action: 'APPROVE' | 'REJECT'; note?: string }) => {
+      // Backend accepts string IDs in URL and converts to integer
+      await api.patch(`/leaves/action/${String(id)}`, null, {
         params: { action, note }
       });
     },
@@ -152,7 +155,7 @@ export default function TeamPage() {
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                          {req.type}
+                          {formatLeaveType(req.type)}
                         </span>
                       )}
                     </TableCell>

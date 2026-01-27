@@ -75,8 +75,10 @@ export function AddHolidayDialog({ isOpen, onClose }: AddHolidayDialogProps) {
             });
 
             toast.success('Holiday added successfully');
-            queryClient.invalidateQueries({ queryKey: ['holidays'] });
-            queryClient.invalidateQueries({ queryKey: ['calendar-holidays'] });
+            // Invalidate and refetch immediately
+            await queryClient.invalidateQueries({ queryKey: ['holidays'], refetchType: 'active' });
+            await queryClient.invalidateQueries({ queryKey: ['calendar-holidays'], refetchType: 'active' });
+            await queryClient.refetchQueries({ queryKey: ['holidays'] });
             reset();
             onClose();
         } catch (error: any) {

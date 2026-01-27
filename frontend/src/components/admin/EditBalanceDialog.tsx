@@ -21,10 +21,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 const balanceSchema = z.object({
-    casual_balance: z.coerce.number().min(0),
-    sick_balance: z.coerce.number().min(0),
-    earned_balance: z.coerce.number().min(0),
-    comp_off_balance: z.coerce.number().min(0),
+    casual_balance: z.number().min(0),
+    sick_balance: z.number().min(0),
+    earned_balance: z.number().min(0),
+    comp_off_balance: z.number().min(0),
 });
 
 type BalanceValues = z.infer<typeof balanceSchema>;
@@ -33,12 +33,13 @@ interface EditBalanceDialogProps {
     isOpen: boolean;
     onClose: () => void;
     user: {
-        id: string;
+        id: number | string; // Backend returns integer, support both
+        _id?: string; // Backward compatibility
         full_name: string;
-        casual_balance: number;
-        sick_balance: number;
-        earned_balance: number;
-        comp_off_balance: number;
+        casual_balance?: number; // Optional, defaults to 0
+        sick_balance?: number; // Optional, defaults to 0
+        earned_balance?: number; // Optional, defaults to 0
+        comp_off_balance?: number; // Optional, defaults to 0
     } | null;
 }
 
@@ -59,10 +60,10 @@ export function EditBalanceDialog({ isOpen, onClose, user }: EditBalanceDialogPr
     useEffect(() => {
         if (user) {
             reset({
-                casual_balance: user.casual_balance,
-                sick_balance: user.sick_balance,
-                earned_balance: user.earned_balance,
-                comp_off_balance: user.comp_off_balance,
+                casual_balance: user.casual_balance || 0,
+                sick_balance: user.sick_balance || 0,
+                earned_balance: user.earned_balance || 0,
+                comp_off_balance: user.comp_off_balance || 0,
             });
         }
     }, [user, reset]);
@@ -72,7 +73,8 @@ export function EditBalanceDialog({ isOpen, onClose, user }: EditBalanceDialogPr
         if (!user) return;
         setLoading(true);
         try {
-            await api.patch(`/admin/users/${user.id}/balance`, data);
+            // Backend accepts string IDs in URL and converts to integer
+            await api.patch(`/admin/users/${String(user.id)}/balance`, data);
 
             toast.success('Balances updated successfully');
             queryClient.invalidateQueries({ queryKey: ['admin-users'] });
@@ -98,19 +100,47 @@ export function EditBalanceDialog({ isOpen, onClose, user }: EditBalanceDialogPr
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label>Casual Leave</Label>
-                            <Input type="number" step="0.5" {...register('casual_balance')} />
+                            <Input 
+                                type="number" 
+                                step="0.5" 
+                                {...register('casual_balance', { valueAsNumber: true })} 
+                            />
+                            {errors.casual_balance && (
+                                <p className="text-sm text-red-500">{errors.casual_balance.message}</p>
+                            )}
                         </div>
                         <div className="space-y-2">
                             <Label>Sick Leave</Label>
-                            <Input type="number" step="0.5" {...register('sick_balance')} />
+                            <Input 
+                                type="number" 
+                                step="0.5" 
+                                {...register('sick_balance', { valueAsNumber: true })} 
+                            />
+                            {errors.sick_balance && (
+                                <p className="text-sm text-red-500">{errors.sick_balance.message}</p>
+                            )}
                         </div>
                         <div className="space-y-2">
                             <Label>Earned Leave</Label>
-                            <Input type="number" step="0.5" {...register('earned_balance')} />
+                            <Input 
+                                type="number" 
+                                step="0.5" 
+                                {...register('earned_balance', { valueAsNumber: true })} 
+                            />
+                            {errors.earned_balance && (
+                                <p className="text-sm text-red-500">{errors.earned_balance.message}</p>
+                            )}
                         </div>
                         <div className="space-y-2">
                             <Label>Comp-Off</Label>
-                            <Input type="number" step="0.5" {...register('comp_off_balance')} />
+                            <Input 
+                                type="number" 
+                                step="0.5" 
+                                {...register('comp_off_balance', { valueAsNumber: true })} 
+                            />
+                            {errors.comp_off_balance && (
+                                <p className="text-sm text-red-500">{errors.comp_off_balance.message}</p>
+                            )}
                         </div>
                     </div>
 

@@ -98,12 +98,44 @@ export default function PersonalDetailsForm() {
     const onSubmit = async (data: FormValues) => {
         setIsLoading(true);
         try {
-            await api.patch('/users/me', data);
+            // Filter out empty strings and convert them to null/undefined for optional fields
+            const payload: any = {};
+            Object.keys(data).forEach((key) => {
+                const value = data[key as keyof FormValues];
+                // Only include non-empty values (empty strings are excluded)
+                if (value !== '' && value !== null && value !== undefined) {
+                    payload[key] = value;
+                }
+            });
+            
+            console.log('Sending profile update payload:', payload);
+            const response = await api.patch('/users/me', payload);
+            console.log('Profile update response:', response.data);
             toast.success('Profile updated successfully');
             await fetchUser();
             setIsEditing(false); // Exit edit mode
         } catch (error: any) {
-            toast.error(error.response?.data?.detail || 'Failed to update profile');
+            console.error('Error updating profile:', error);
+            let errorMessage = 'Failed to update profile';
+            
+            if (error.response) {
+                const detail = error.response.data?.detail;
+                if (typeof detail === 'string') {
+                    errorMessage = detail;
+                } else if (Array.isArray(detail)) {
+                    errorMessage = detail.map((err: any) => err.msg || err.message || JSON.stringify(err)).join(', ');
+                } else if (detail && typeof detail === 'object') {
+                    errorMessage = JSON.stringify(detail);
+                } else if (error.response.status) {
+                    errorMessage = `Error ${error.response.status}: ${error.response.statusText || 'Request failed'}`;
+                }
+            } else if (error.request) {
+                errorMessage = 'No response from server. Please check your connection.';
+            } else {
+                errorMessage = error.message || 'An unexpected error occurred';
+            }
+            
+            toast.error(errorMessage);
         } finally {
             setIsLoading(false);
         }

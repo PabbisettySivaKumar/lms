@@ -22,8 +22,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { AddHolidayDialog } from '@/components/admin/AddHolidayDialog';
 
 interface Holiday {
-    id: string; // mapped from _id
-    _id?: string;
+    id: number | string; // Backend returns integer, support both
+    _id?: string; // Backward compatibility
     name: string;
     date: string;
     is_optional: boolean;
@@ -49,39 +49,52 @@ export default function AdminHolidaysPage() {
     }, [user, isLoading, router]);
 
     // Fetch Holidays
-    const { data: holidays, isLoading: holidaysLoading } = useQuery({
+    const { data: holidays, isLoading: holidaysLoading, refetch: refetchHolidays } = useQuery({
         queryKey: ['holidays'],
         queryFn: async () => {
             try {
-                const res = await api.get<any[]>('/calendar/holidays');
-                console.log('Fetched Holidays:', res.data);
-                return res.data.map((h: any) => ({
+                const res = await api.get<any[]>('/calendar/holidays', {
+                    headers: {
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                console.log('Fetched Holidays:', res.data, 'Count:', res.data?.length);
+                const mapped = res.data.map((h: any) => ({
                     ...h,
-                    id: h.id || h._id
+                    id: h.id // Backend returns integer ID
                 })) as Holiday[];
+                console.log('Mapped Holidays:', mapped);
+                return mapped;
             } catch (e) {
+                console.error('Error fetching holidays:', e);
                 return [];
             }
         },
         enabled: !!user,
+        staleTime: 0, // Always consider data stale to allow immediate refetch after invalidation
+        refetchOnWindowFocus: true, // Refetch when window regains focus
+        refetchOnMount: true, // Always refetch when component mounts
     });
 
     // Delete Mutation
     const deleteMutation = useMutation({
-        mutationFn: async (id: string) => {
-            await api.delete(`/admin/holidays/${id}`);
+        mutationFn: async (id: number | string) => {
+            // Backend accepts string IDs in URL and converts to integer
+            await api.delete(`/admin/holidays/${String(id)}`);
         },
         onSuccess: () => {
             toast.success('Holiday deleted');
-            queryClient.invalidateQueries({ queryKey: ['holidays'] });
-            queryClient.invalidateQueries({ queryKey: ['calendar-holidays'] });
+            // Invalidate and refetch immediately
+            queryClient.invalidateQueries({ queryKey: ['holidays'], refetchType: 'active' });
+            queryClient.invalidateQueries({ queryKey: ['calendar-holidays'], refetchType: 'active' });
+            queryClient.refetchQueries({ queryKey: ['holidays'] });
         },
         onError: (error: any) => {
             toast.error(error.response?.data?.detail || 'Failed to delete holiday');
         }
     });
 
-    const handleDelete = (id: string) => {
+    const handleDelete = (id: number | string) => {
         if (confirm('Are you sure you want to delete this holiday?')) {
             deleteMutation.mutate(id);
         }
@@ -108,6 +121,13 @@ export default function AdminHolidaysPage() {
                     <Button variant="destructive" onClick={handleYearlyReset}>
                         ⚠️ Reset Leaves (Manual)
                     </Button>
+                    <Button 
+                        variant="outline" 
+                        onClick={() => refetchHolidays()}
+                        disabled={holidaysLoading}
+                    >
+                        {holidaysLoading ? 'Refreshing...' : 'Refresh'}
+                    </Button>
                     <Button variant="outline" onClick={() => setIsImportOpen(true)}>
                         <Upload className="mr-2 h-4 w-4" /> Import CSV
                     </Button>
@@ -129,44 +149,45 @@ export default function AdminHolidaysPage() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {holidays?.length === 0 && (
+                            {(!holidays || holidays.length === 0) && !holidaysLoading ? (
                                 <TableRow>
                                     <TableCell colSpan={4} className="text-center py-8 text-slate-500">
                                         No holidays found. Add one to get started.
                                     </TableCell>
                                 </TableRow>
+                            ) : (
+                                holidays?.map((h, i) => (
+                                    <TableRow key={h.id || i}>
+                                        <TableCell className="font-medium flex items-center">
+                                            <CalendarIcon className="mr-2 h-4 w-4 text-slate-500" />
+                                            {format(parseISO(h.date), 'PPP')}
+                                        </TableCell>
+                                        <TableCell>{h.name}</TableCell>
+                                        <TableCell>
+                                            {h.is_optional ? (
+                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                                                    Optional
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                                    Public
+                                                </span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                onClick={() => handleDelete(String(h.id))}
+                                                disabled={deleteMutation.isPending}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))
                             )}
-                            {holidays?.map((h, i) => (
-                                <TableRow key={h.id || i}>
-                                    <TableCell className="font-medium flex items-center">
-                                        <CalendarIcon className="mr-2 h-4 w-4 text-slate-500" />
-                                        {format(parseISO(h.date), 'PPP')}
-                                    </TableCell>
-                                    <TableCell>{h.name}</TableCell>
-                                    <TableCell>
-                                        {h.is_optional ? (
-                                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                                                Optional
-                                            </span>
-                                        ) : (
-                                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                                                Public
-                                            </span>
-                                        )}
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                                            onClick={() => handleDelete(h.id)}
-                                            disabled={deleteMutation.isPending}
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </Button>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
                         </TableBody>
                     </Table>
                 </CardContent>

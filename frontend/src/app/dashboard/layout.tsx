@@ -8,6 +8,7 @@ import { LogOut, Users, CalendarDays, UserCircle, FileText } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import Sidebar from '@/components/layout/Sidebar';
+import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 
 export default function DashboardLayout({
   children,
@@ -34,16 +35,18 @@ export default function DashboardLayout({
   if (!isMounted) return null;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-900">
-      {/* Sidebar - Hidden on mobile, usually? For now just show it. */}
-      {user && <Sidebar className="shrink-0" />}
+    <ErrorBoundary>
+      <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-900">
+        {/* Sidebar - Hidden on mobile, usually? For now just show it. */}
+        {user && <Sidebar className="shrink-0" />}
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <main className="flex-1 overflow-y-auto p-4 sm:p-8">
-          {children}
-        </main>
+        {/* Main Content */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <main className="flex-1 overflow-y-auto p-4 sm:p-8">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </ErrorBoundary>
   );
 }

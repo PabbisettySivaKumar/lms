@@ -1,6 +1,6 @@
 # Leave Management System
 
-A comprehensive web-based application for managing employee leaves, holidays, and company policies. Built with **FastAPI** (Backend), **Next.js** (Frontend), and **MongoDB**.
+A comprehensive web-based application for managing employee leaves, holidays, and company policies. Built with **FastAPI** (Backend), **Next.js** (Frontend), and **MySQL**.
 
 ## Features
 
@@ -35,9 +35,9 @@ A comprehensive web-based application for managing employee leaves, holidays, an
 
 ## Tech Stack
 
-*   **Backend**: Python, FastAPI, MongoDB (Motor), Pydantic.
+*   **Backend**: Python, FastAPI, SQLAlchemy, Pydantic.
 *   **Frontend**: TypeScript, Next.js, Tailwind CSS, Shadcn UI, React Query.
-*   **Database**: MongoDB.
+*   **Database**: MySQL.
 *   **Email**: Office 365 SMTP Integration.
 
 ## Setup Instructions
@@ -45,7 +45,7 @@ A comprehensive web-based application for managing employee leaves, holidays, an
 ### Prerequisites
 *   Python 3.10+
 *   Node.js 18+
-*   MongoDB Instance
+*   MySQL Instance
 
 ### 1. Backend Setup
 
@@ -61,7 +61,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Run Server
-uvicorn src.main:app --reload
+uvicorn backend.main:app --reload
 ```
 
 Backend will start at `http://localhost:8000`.
@@ -87,8 +87,11 @@ Create a `.env` file in the root directory:
 
 ```env
 # Database
-MONGODB_URL=mongodb://localhost:27017
-DB_NAME=leave_management_db
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=leave_management_db
 
 # Security
 SECRET_KEY=your_super_secret_key_here
@@ -97,7 +100,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 # Email (Office 365)
 MAIL_USERNAME=your_email@outlook.com
-MAIL_PASSWORD=your_password
+MAIL_PASSWORD=your_password_or_app_password
+MAIL_FROM=your_email@outlook.com
+MAIL_SERVER=smtp.office365.com
+MAIL_PORT=587
 MAIL_FROM=your_email@outlook.com
 MAIL_PORT=587
 MAIL_SERVER=smtp.office365.com
@@ -110,5 +116,5 @@ ADMIN_EMAIL=admin@example.com
 
 The project uses a **Monorepo** structure:
 *   **`frontend/`**: Next.js Client Application.
-*   **`src/`**: FastAPI Backend Application.
+*   **`backend/`**: FastAPI Backend Application.
 *   **`requirements.txt`**: Python dependencies.

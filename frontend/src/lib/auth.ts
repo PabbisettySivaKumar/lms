@@ -7,13 +7,14 @@ export interface LoginResponse {
 }
 
 export interface User {
-    id: string; // mapped from _id
+    id: number | string; // Backend returns integer, support both for compatibility
+    _id?: string; // Backward compatibility
     email: string;
     full_name: string;
     role: string;
     is_active: boolean;
     joining_date?: string;
-    manager_id?: string;
+    manager_id?: number | string; // Can be integer or string
     // Balances
     casual_balance: number;
     sick_balance: number;

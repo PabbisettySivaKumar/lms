@@ -232,16 +232,36 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
         setIsUploading(true);
         try {
             const res = await api.post('/admin/holidays/bulk', parsedData);
+            console.log('Bulk import response:', res.data);
             if (res.data.success) {
                 toast.success(`Successfully imported ${res.data.count} holidays!`);
                 if (res.data.errors && res.data.errors.length > 0) {
                     toast.warning(`Skipped ${res.data.errors.length} duplicates.`);
                 }
+                // Small delay to ensure backend commit is complete
+                await new Promise(resolve => setTimeout(resolve, 200));
+                
+                // Invalidate all holiday-related queries (this marks them as stale)
                 queryClient.invalidateQueries({ queryKey: ['holidays'] });
                 queryClient.invalidateQueries({ queryKey: ['calendar-holidays'] });
-                handleClose();
+                
+                // Force immediate refetch of all active queries
+                await Promise.all([
+                    queryClient.refetchQueries({ queryKey: ['holidays'] }),
+                    queryClient.refetchQueries({ queryKey: ['calendar-holidays'] })
+                ]);
+                
+                console.log('Queries invalidated and refetched');
+                
+                // Close dialog after a brief moment to allow UI to update
+                setTimeout(() => {
+                    handleClose();
+                }, 100);
+            } else {
+                toast.error('Import failed: Unexpected response format');
             }
         } catch (error: any) {
+            console.error('Import error:', error);
             const detail = error.response?.data?.detail;
             let errorMessage = "Import failed";
 

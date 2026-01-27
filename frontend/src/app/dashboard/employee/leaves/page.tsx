@@ -15,6 +15,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
+import { formatLeaveType } from '@/lib/leaveUtils';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -26,12 +27,14 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/common/StatusBadge';
+import { Pagination } from '@/components/common/Pagination';
 
 interface LeaveRequest {
-    id: string;
+    id: number | string; // Backend returns integer, but we support both
+    _id?: string; // Backward compatibility
     start_date: string;
-    end_date: string;
+    end_date: string | null;
     type: string;
     status: string;
     deductible_days: number;
@@ -41,19 +44,37 @@ export default function MyLeavesPage() {
     const queryClient = useQueryClient();
     const [leaveToCancel, setLeaveToCancel] = useState<string | null>(null);
 
-    // Fetch Leaves
-    const { data: leaves, isLoading } = useQuery({
-        queryKey: ['my-leaves'],
+    // Pagination state
+    const [page, setPage] = useState(1);
+    const itemsPerPage = 20;
+
+    // Fetch Leaves with pagination
+    const { data: leavesData, isLoading } = useQuery({
+        queryKey: ['my-leaves', page],
         queryFn: async () => {
-            const res = await api.get<LeaveRequest[]>('/leaves/mine');
+            const params = new URLSearchParams({
+                skip: String((page - 1) * itemsPerPage),
+                limit: String(itemsPerPage),
+            });
+            const res = await api.get<{
+                leaves: LeaveRequest[];
+                total: number;
+                skip: number;
+                limit: number;
+            }>(`/leaves/mine?${params.toString()}`);
             return res.data;
         },
     });
 
+    const leaves = leavesData?.leaves || [];
+    const totalLeaves = leavesData?.total || 0;
+    const totalPages = Math.ceil(totalLeaves / itemsPerPage);
+
     // Cancel Mutation
     const cancelMutation = useMutation({
-        mutationFn: async (id: string) => {
-            const res = await api.post(`/leaves/${id}/cancel`);
+        mutationFn: async (id: number | string) => {
+            // Backend accepts string IDs in URL and converts to integer
+            const res = await api.post(`/leaves/${String(id)}/cancel`);
             return res.data;
         },
         onSuccess: (data) => {
@@ -113,7 +134,7 @@ export default function MyLeavesPage() {
                             leaves?.map((leave) => (
                                 <TableRow key={leave.id}>
                                     <TableCell className="font-medium">
-                                        {leave.type.replace('_', ' ')}
+                                        {formatLeaveType(leave.type)}
                                     </TableCell>
                                     <TableCell>
                                         {format(parseISO(leave.start_date), 'MMM d, yyyy')}
@@ -133,7 +154,7 @@ export default function MyLeavesPage() {
                                             <Button
                                                 variant="destructive"
                                                 size="sm"
-                                                onClick={() => handleCancelClick(leave.id)}
+                                                onClick={() => handleCancelClick(String(leave.id))}
                                                 disabled={cancelMutation.isPending}
                                             >
                                                 Cancel
@@ -146,6 +167,17 @@ export default function MyLeavesPage() {
                     </TableBody>
                 </Table>
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+                <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    onPageChange={setPage}
+                    totalItems={totalLeaves}
+                    itemsPerPage={itemsPerPage}
+                />
+            )}
 
             <AlertDialog open={!!leaveToCancel} onOpenChange={(open) => !open && setLeaveToCancel(null)}>
                 <AlertDialogContent>
@@ -168,39 +200,5 @@ export default function MyLeavesPage() {
                 </AlertDialogContent>
             </AlertDialog>
         </div>
-    );
-}
-
-function StatusBadge({ status }: { status: string }) {
-    let variant: "default" | "secondary" | "destructive" | "outline" = "outline";
-    let className = "";
-
-    switch (status) {
-        case 'APPROVED':
-            variant = "default";
-            className = "bg-green-100 text-green-800 hover:bg-green-100 border-green-200";
-            break;
-        case 'PENDING':
-            variant = "secondary";
-            className = "bg-yellow-100 text-yellow-800 hover:bg-yellow-100 border-yellow-200";
-            break;
-        case 'REJECTED':
-            variant = "destructive";
-            className = "bg-red-100 text-red-800 hover:bg-red-100 border-red-200";
-            break;
-        case 'CANCELLED':
-            variant = "outline";
-            className = "bg-gray-100 text-gray-800 border-gray-200";
-            break;
-        case 'CANCELLATION_REQUESTED':
-            variant = "secondary";
-            className = "bg-orange-100 text-orange-800 hover:bg-orange-100 border-orange-200";
-            break;
-    }
-
-    return (
-        <Badge variant={variant} className={className}>
-            {status.replace('_', ' ')}
-        </Badge>
     );
 }

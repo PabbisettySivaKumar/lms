@@ -31,13 +31,15 @@ export function LeaveCalendar() {
     });
 
     // Fetch User Leaves
-    const { data: myLeaves } = useQuery({
+    const { data: myLeavesData } = useQuery({
         queryKey: ['my-leaves'],
         queryFn: async () => {
-            const res = await api.get<any[]>('/leaves/mine');
+            const res = await api.get<{ leaves: any[]; total: number; skip: number; limit: number }>('/leaves/mine');
             return res.data;
         }
     });
+
+    const myLeaves = myLeavesData?.leaves || [];
 
     // Create Matchers
     const holidayDates = holidays?.map(h => new Date(h.date)) || [];
@@ -45,7 +47,7 @@ export function LeaveCalendar() {
     const approvedDates: Date[] = [];
     const pendingDates: Date[] = [];
 
-    myLeaves?.forEach(leave => {
+    myLeaves.forEach(leave => {
         let current = new Date(leave.start_date);
         const end = new Date(leave.end_date);
 

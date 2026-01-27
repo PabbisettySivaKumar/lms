@@ -66,34 +66,65 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
         handleSubmit,
         reset,
         setValue,
+        watch,
         formState: { errors }
     } = useForm<FormValues>({
         resolver: zodResolver(schema),
     });
+    
+    const selectedRole = watch('role');
+    const selectedManager = watch('manager_id');
 
     useEffect(() => {
-        if (user && isOpen) {
+        if (user && isOpen && managers) {
+            // Find manager's employee_id if manager exists
+            let managerEmployeeId = 'none';
+            if (user.manager_id) {
+                // Try to find manager by matching manager_id with managers list
+                // Note: managers list has employee_id, we need to find which one matches
+                // Since we don't have user ID in managers, we'll use manager_name if available
+                if (user.manager_name) {
+                    const foundManager = managers.find((m: any) => m.full_name === user.manager_name);
+                    if (foundManager) {
+                        managerEmployeeId = foundManager.employee_id;
+                    }
+                }
+            }
+            
             reset({
                 full_name: user.full_name,
                 email: user.email,
                 employee_id: user.employee_id,
                 role: user.role,
-                manager_id: user.manager_id || 'none', // Handle null
+                manager_id: managerEmployeeId,
                 joining_date: user.joining_date || undefined
             });
         }
-    }, [user, isOpen, reset]);
+    }, [user, isOpen, reset, managers]);
 
     const onSubmit = async (data: FormValues) => {
         if (!user) return;
         setIsLoading(true);
         try {
-            const payload = { ...data };
-            if (payload.manager_id === 'none') {
-                payload.manager_id = null;
+            // Prepare payload - convert manager_id to manager_employee_id
+            const payload: any = {
+                full_name: data.full_name,
+                email: data.email,
+                employee_id: data.employee_id,
+                role: data.role?.toLowerCase(), // Ensure lowercase
+                joining_date: data.joining_date,
+            };
+            
+            // Handle manager - backend expects manager_employee_id, not manager_id
+            if (data.manager_id && data.manager_id !== 'none') {
+                // data.manager_id is actually the employee_id from the select
+                payload.manager_employee_id = data.manager_id;
+            } else {
+                payload.manager_employee_id = null;
             }
-            // Use the correct ID (id or _id)
-            const userId = user.id || user._id;
+            
+            // Backend accepts string IDs in URL and converts to integer
+            const userId = String(user.id);
             await api.patch(`/admin/users/${userId}`, payload);
 
             toast.success('User updated successfully');
@@ -141,8 +172,8 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
                         <div className="space-y-2">
                             <Label>Role</Label>
                             <Select
-                                onValueChange={(val) => setValue('role', val)}
-                                defaultValue={user?.role}
+                                value={selectedRole || user?.role || 'employee'}
+                                onValueChange={(val) => setValue('role', val.toLowerCase(), { shouldValidate: true })}
                             >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Select role" />
@@ -167,8 +198,8 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
                     <div className="space-y-2">
                         <Label>Reporting Manager</Label>
                         <Select
-                            onValueChange={(val) => setValue('manager_id', val)}
-                            defaultValue={user?.manager_id || 'none'}
+                            value={selectedManager || 'none'}
+                            onValueChange={(val) => setValue('manager_id', val, { shouldValidate: true })}
                         >
                             <SelectTrigger>
                                 <SelectValue placeholder="Select manager" />

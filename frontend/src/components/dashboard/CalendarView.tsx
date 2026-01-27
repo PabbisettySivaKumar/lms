@@ -24,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { DateRange } from 'react-day-picker';
+import { formatLeaveType } from '@/lib/leaveUtils';
 
 // Types
 interface Holiday {
@@ -33,9 +34,10 @@ interface Holiday {
 }
 
 interface Leave {
-    id: string;
+    id: number | string; // Backend returns integer, support both
+    _id?: string; // Backward compatibility
     start_date: string; // YYYY-MM-DD
-    end_date: string;   // YYYY-MM-DD
+    end_date: string | null;   // YYYY-MM-DD, can be null for Sabbatical
     type: string;
     status: 'APPROVED' | 'PENDING' | 'REJECTED' | 'CANCELLED' | 'CANCELLATION_REQUESTED';
 }
@@ -56,13 +58,15 @@ export function CalendarView({ onDateSelect }: CalendarViewProps) {
         }
     });
 
-    const { data: leaves, isLoading: leavesLoading } = useQuery({
+    const { data: leavesData, isLoading: leavesLoading } = useQuery({
         queryKey: ['my-leaves'],
         queryFn: async () => {
-            const res = await api.get<Leave[]>('/leaves/mine');
+            const res = await api.get<{ leaves: Leave[]; total: number; skip: number; limit: number }>('/leaves/mine');
             return res.data;
         }
     });
+
+    const leaves = leavesData?.leaves || [];
 
     const isLoading = holidaysLoading || leavesLoading;
 
@@ -249,7 +253,7 @@ export function CalendarView({ onDateSelect }: CalendarViewProps) {
                                         title={`${leave!.type} - ${leave!.status}`}
                                         onMouseDown={(e) => e.stopPropagation()}
                                     >
-                                        {leave!.type.replace('_', ' ')}
+                                        {formatLeaveType(leave!.type)}
                                     </div>
                                 )}
                             </div>

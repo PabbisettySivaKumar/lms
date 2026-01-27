@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
@@ -38,14 +38,22 @@ export default function ResetPasswordPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [loading, setLoading] = useState(false);
-    const [token, setToken] = useState('');
+    
+    // Extract token from URL - use useMemo to get stable value
+    const tokenParam = useMemo(() => searchParams.get('token'), [searchParams]);
+    const token = tokenParam || '';
 
+    // Clean URL after extracting token (only once)
     useEffect(() => {
-        const tokenParam = searchParams.get('token');
         if (tokenParam) {
-            setToken(tokenParam);
+            // Remove token from URL for security (replace with clean URL)
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, '', newUrl);
+        } else {
+            // If no token in URL, show error
+            toast.error('Invalid or missing reset token. Please use the link from your email.');
         }
-    }, [searchParams]);
+    }, [tokenParam]);
 
     const {
         register,
@@ -55,14 +63,14 @@ export default function ResetPasswordPage() {
     } = useForm<ResetPasswordSchema>({
         resolver: zodResolver(resetPasswordSchema),
         defaultValues: {
-            token: token,
+            token: '',
         },
     });
 
-    // Update token when it's loaded from URL
+    // Update token in form when it's loaded from URL
     useEffect(() => {
         if (token) {
-            setValue('token', token);
+            setValue('token', token, { shouldValidate: false });
         }
     }, [token, setValue]);
 
@@ -89,27 +97,24 @@ export default function ResetPasswordPage() {
                 <CardHeader className="space-y-1">
                     <CardTitle className="text-2xl font-bold text-center">Reset Password</CardTitle>
                     <CardDescription className="text-center">
-                        Enter your reset token and new password
+                        Enter your new password
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="token">Reset Token</Label>
-                            <Input
-                                id="token"
-                                type="text"
-                                placeholder="Enter the token from your email"
-                                {...register('token')}
-                                defaultValue={token}
-                            />
-                            {errors.token && (
-                                <p className="text-sm text-red-500">{errors.token.message}</p>
-                            )}
-                            <p className="text-xs text-slate-500">
-                                Check your email for the reset token (expires in 15 minutes)
-                            </p>
-                        </div>
+                        {/* Hidden token field - token is extracted from URL and stored securely */}
+                        <input
+                            type="hidden"
+                            {...register('token')}
+                            value={token}
+                        />
+                        {!token && (
+                            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                                <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                                    No reset token found. Please use the link from your email.
+                                </p>
+                            </div>
+                        )}
                         <div className="space-y-2">
                             <Label htmlFor="new_password">New Password</Label>
                             <Input

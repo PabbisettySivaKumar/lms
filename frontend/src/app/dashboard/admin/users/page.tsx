@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, MoreVertical, Trash, UserCog, CreditCard, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { AddUserDialog } from '@/components/admin/AddUserDialog';
 import { EditBalanceDialog } from '@/components/admin/EditBalanceDialog';
 import EditUserDialog from '@/components/admin/EditUserDialog';
+import { Pagination } from '@/components/common/Pagination';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -42,16 +43,19 @@ import {
 } from '@/components/ui/alert-dialog';
 
 interface UserData {
-    id: string; // From _id
+    id: number | string; // Backend returns integer, support both for compatibility
+    _id?: string; // Backward compatibility
     employee_id: string;
     full_name: string;
     email: string;
     role: string;
-    manager_id?: string;
-    casual_balance: number;
-    sick_balance: number;
-    earned_balance: number;
-    comp_off_balance: number;
+    manager_id?: number | string; // Can be integer or string
+    manager_name?: string; // Manager's full name (populated by backend)
+    casual_balance?: number; // Optional, defaults to 0
+    sick_balance?: number; // Optional, defaults to 0
+    earned_balance?: number; // Optional, defaults to 0
+    comp_off_balance?: number; // Optional, defaults to 0
+    wfh_balance?: number; // Optional, defaults to 0
 }
 
 interface ManagerData {
@@ -63,6 +67,7 @@ interface ManagerData {
 export default function AdminUsersPage() {
     const { user, isLoading } = useAuth();
     const router = useRouter();
+    const queryClient = useQueryClient();
 
     const [isAddOpen, setIsAddOpen] = useState(false);
     const [editingBalanceUser, setEditingBalanceUser] = useState<UserData | null>(null);
@@ -79,26 +84,52 @@ export default function AdminUsersPage() {
         }
     }, [user, isLoading, router]);
 
-    // Fetch Users
-    const { data: users, isLoading: usersLoading, refetch } = useQuery({
-        queryKey: ['admin-users'],
+    // Pagination state
+    const [page, setPage] = useState(1);
+    const [searchTerm, setSearchTerm] = useState('');
+    const itemsPerPage = 20;
+
+    // Fetch Users with pagination
+    const { data: usersData, isLoading: usersLoading } = useQuery({
+        queryKey: ['admin-users', page, searchTerm],
         queryFn: async () => {
-            const res = await api.get<any[]>('/admin/users');
-            return res.data.map((u: any) => ({
-                ...u,
-                id: u.id || u._id || ''
-            })) as UserData[];
+            const params = new URLSearchParams({
+                skip: String((page - 1) * itemsPerPage),
+                limit: String(itemsPerPage),
+            });
+            if (searchTerm) {
+                params.append('search', searchTerm);
+            }
+            const res = await api.get<{
+                users: any[];
+                total: number;
+                skip: number;
+                limit: number;
+            }>(`/admin/users?${params.toString()}`);
+            return {
+                users: res.data.users.map((u: any) => ({
+                    ...u,
+                    id: u.id, // Backend returns integer ID
+                    manager_id: u.manager_id ?? undefined,
+                })) as UserData[],
+                total: res.data.total,
+            };
         },
         enabled: !!user, // Only fetch if user is logged in
     });
 
+    const users = usersData?.users || [];
+    const totalUsers = usersData?.total || 0;
+    const totalPages = Math.ceil(totalUsers / itemsPerPage);
+
     const handleDeleteUser = async () => {
         if (!deletingUser) return;
         try {
-            await api.delete(`/admin/users/${deletingUser.id}`);
+            // Backend accepts string IDs in URL and converts to integer
+            await api.delete(`/admin/users/${String(deletingUser.id)}`);
             toast.success('User deleted successfully');
             setDeletingUser(null);
-            refetch();
+            queryClient.invalidateQueries({ queryKey: ['admin-users'] });
         } catch (error: any) {
             toast.error(error.response?.data?.detail || 'Failed to delete user');
         }
@@ -114,18 +145,17 @@ export default function AdminUsersPage() {
         enabled: !!user
     });
 
-    // Search State
-    const [searchTerm, setSearchTerm] = useState('');
+    // Transform managers for select - backend returns employee_id, not id
+    const managerOptions = managers?.map(m => ({ 
+        id: m.employee_id, // Use employee_id as the id for the select
+        name: `${m.full_name} (${m.employee_id})` 
+    })) || [];
 
-    // Transform managers for select
-    const managerOptions = managers?.map(m => ({ id: m.employee_id, name: `${m.full_name} (${m.employee_id})` })) || [];
-
-    // Filtered Users
-    const filteredUsers = users?.filter(u =>
-        u.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.employee_id.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    // Handle search with debounce
+    const handleSearchChange = (value: string) => {
+        setSearchTerm(value);
+        setPage(1); // Reset to first page on search
+    };
 
     if (isLoading || usersLoading) return <div className="p-8">Loading users...</div>;
 
@@ -143,7 +173,7 @@ export default function AdminUsersPage() {
                 <Input
                     placeholder="Search by name, email, or ID..."
                     value={searchTerm}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleSearchChange(e.target.value)}
                     className="max-w-sm"
                 />
             </div>
@@ -164,10 +194,24 @@ export default function AdminUsersPage() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {filteredUsers?.map((u) => {
-                                const managerName = u.manager_id
-                                    ? (users?.find(m => m.employee_id === u.manager_id)?.full_name || u.manager_id)
-                                    : '-';
+                            {users.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={8} className="h-24 text-center">
+                                        {usersLoading ? 'Loading...' : 'No users found.'}
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                                users.map((u) => {
+                                    // Use manager_name from backend if available (preferred), otherwise fallback
+                                    const managerName = u.manager_name || 
+                                        (u.manager_id
+                                            ? (users.find(m => {
+                                                // Handle both number and string comparisons
+                                                const managerId = typeof u.manager_id === 'string' ? parseInt(u.manager_id) : u.manager_id;
+                                                const userId = typeof m.id === 'string' ? parseInt(m.id) : m.id;
+                                                return managerId === userId;
+                                            })?.full_name || `Manager ID: ${u.manager_id}`)
+                                            : '-');
 
                                 return (
                                     <TableRow key={u.employee_id}>
@@ -180,9 +224,11 @@ export default function AdminUsersPage() {
                                         </TableCell>
                                         <TableCell className="capitalize">{u.role}</TableCell>
                                         <TableCell className="whitespace-nowrap">{managerName}</TableCell>
-                                        <TableCell className="text-center">{u.casual_balance + u.earned_balance}</TableCell>
-                                        <TableCell className="text-center">{u.sick_balance}</TableCell>
-                                        <TableCell className="text-center">{u.comp_off_balance}</TableCell>
+                                        <TableCell className="text-center">
+                                            {(u.casual_balance || 0) + (u.earned_balance || 0)}
+                                        </TableCell>
+                                        <TableCell className="text-center">{u.sick_balance || 0}</TableCell>
+                                        <TableCell className="text-center">{u.comp_off_balance || 0}</TableCell>
                                         <TableCell className="text-right">
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
@@ -214,11 +260,23 @@ export default function AdminUsersPage() {
                                         </TableCell>
                                     </TableRow>
                                 );
-                            })}
+                            })
+                            )}
                         </TableBody>
                     </Table>
                 </CardContent>
             </Card>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+                <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    onPageChange={setPage}
+                    totalItems={totalUsers}
+                    itemsPerPage={itemsPerPage}
+                />
+            )}
 
             <AddUserDialog
                 isOpen={isAddOpen}
@@ -236,7 +294,7 @@ export default function AdminUsersPage() {
                 isOpen={!!editingDetailsUser}
                 onClose={() => setEditingDetailsUser(null)}
                 user={editingDetailsUser}
-                onSuccess={refetch}
+                onSuccess={() => queryClient.invalidateQueries({ queryKey: ['admin-users'] })}
             />
 
             <AlertDialog open={!!deletingUser} onOpenChange={() => setDeletingUser(null)}>

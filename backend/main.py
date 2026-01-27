@@ -7,18 +7,19 @@ import os
 # Load env vars
 load_dotenv()
 
-from src.routes import auth, holidays, leaves, users, policies
-from src.services.scheduler import start_scheduler, shutdown_scheduler
+from backend.routes import auth, holidays, leaves, users, policies
+from backend.services.scheduler import start_scheduler, shutdown_scheduler
+from backend.db import init_db, close_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    await init_db()  # Initialize SQLAlchemy and create tables
     start_scheduler()
-    from src.db import create_indexes
-    await create_indexes()
     yield
     # Shutdown
     shutdown_scheduler()
+    await close_db()  # Close database connections
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -39,16 +40,18 @@ app.add_middleware(
 )
 
 # Include Routers
+@app.get("/")
+async def root():
+    return {"message": "Leave Management System API is running"}
+
 app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(leaves.router)
 app.include_router(holidays.router)
 app.include_router(holidays.calendar_router)
-app.include_router(leaves.router)
-app.include_router(users.router)
 app.include_router(policies.router)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/")
-async def root():
-    return {"message": "Leave Management System API is running"}
+

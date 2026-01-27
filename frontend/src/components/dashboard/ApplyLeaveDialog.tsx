@@ -38,7 +38,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 
 const applySchema = z.object({
-  type: z.enum(['CASUAL', 'SICK', 'EARNED', 'COMP_OFF', 'MATERNITY', 'SABBATICAL', 'WFH']),
+  type: z.enum(['CASUAL', 'SICK', 'COMP_OFF', 'MATERNITY', 'SABBATICAL', 'WFH']),
   reason: z.string().min(1, 'Reason is required'),
 });
 
@@ -134,16 +134,27 @@ export function ApplyLeaveDialog({
       reset();
       onClose();
     } catch (error: any) {
-      const detail = error.response?.data?.detail;
-      let errorMessage = 'Failed to apply';
-
-      if (typeof detail === 'string') {
-        errorMessage = detail;
-      } else if (Array.isArray(detail)) {
-        // Pydantic validation error
-        errorMessage = detail.map((err: any) => err.msg).join(', ');
-      } else if (typeof detail === 'object') {
-        errorMessage = JSON.stringify(detail);
+      console.error('Error applying leave:', error);
+      
+      let errorMessage = 'Failed to apply leave';
+      
+      if (error.response) {
+        const detail = error.response.data?.detail;
+        
+        if (typeof detail === 'string') {
+          errorMessage = detail;
+        } else if (Array.isArray(detail)) {
+          // Pydantic validation error
+          errorMessage = detail.map((err: any) => err.msg || err.message || JSON.stringify(err)).join(', ');
+        } else if (detail && typeof detail === 'object') {
+          errorMessage = JSON.stringify(detail);
+        } else if (error.response.status) {
+          errorMessage = `Error ${error.response.status}: ${error.response.statusText || 'Request failed'}`;
+        }
+      } else if (error.request) {
+        errorMessage = 'No response from server. Please check your connection.';
+      } else {
+        errorMessage = error.message || 'An unexpected error occurred';
       }
 
       toast.error(errorMessage);
@@ -234,9 +245,8 @@ export function ApplyLeaveDialog({
                 <SelectValue placeholder="Select type" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="CASUAL">Casual Leave</SelectItem>
+                <SelectItem value="CASUAL">Casual/Earned Leave</SelectItem>
                 <SelectItem value="SICK">Sick Leave</SelectItem>
-                <SelectItem value="EARNED">Earned Leave</SelectItem>
                 <SelectItem value="WFH">Work From Home</SelectItem>
                 <SelectItem value="COMP_OFF">Comp-Off</SelectItem>
                 <SelectItem value="MATERNITY">Maternity Leave</SelectItem>

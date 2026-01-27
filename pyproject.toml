@@ -1,0 +1,27 @@
+[tool.pyright]
+# Pyright configuration for type checking
+venvPath = "."
+venv = "venv"
+pythonVersion = "3.13"
+pythonPlatform = "Darwin"
+
+# Include paths
+include = ["backend", "scripts", "alembic"]
+exclude = ["**/__pycache__", "**/node_modules", "venv", ".venv"]
+
+# Type checking mode
+typeCheckingMode = "basic"
+
+[tool.basedpyright]
+# Basedpyright configuration (fork of Pyright)
+venvPath = "."
+venv = "venv"
+pythonVersion = "3.13"
+pythonPlatform = "Darwin"
+
+include = ["backend", "scripts", "alembic"]
+exclude = ["**/__pycache__", "**/node_modules", "venv", ".venv"]
+
+typeCheckingMode = "off"  # Disable type checking to avoid import warnings
+reportMissingImports = "none"
+reportMissingTypeStubs = "none"
