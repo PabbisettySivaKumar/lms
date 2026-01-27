@@ -28,33 +28,58 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        // Log error details for debugging
+        // Log error details for debugging with better serialization
         if (error.response) {
-            console.error('Axios error response:', {
+            // Safely extract error details
+            const errorDetails: any = {
                 status: error.response.status,
                 statusText: error.response.statusText,
                 data: error.response.data,
-                headers: error.response.headers,
-                config: {
-                    method: error.config?.method,
-                    url: error.config?.url,
-                    baseURL: error.config?.baseURL,
-                }
-            });
+            };
+            
+            // Safely extract headers (may have circular references)
+            try {
+                errorDetails.headers = error.response.headers ? 
+                    Object.fromEntries(
+                        Object.entries(error.response.headers).slice(0, 10) // Limit to first 10 headers
+                    ) : undefined;
+            } catch (e) {
+                errorDetails.headers = 'Unable to serialize headers';
+            }
+            
+            // Extract config details
+            errorDetails.config = {
+                method: error.config?.method?.toUpperCase(),
+                url: error.config?.url,
+                baseURL: error.config?.baseURL,
+                fullURL: error.config?.baseURL + error.config?.url,
+            };
+            
+            // Log the error
+            console.error('Axios error response:', errorDetails);
+            
+            // Also log the raw error for debugging
+            if (process.env.NODE_ENV === 'development') {
+                console.error('Raw error object:', error);
+            }
         } else if (error.request) {
             // Request was made but no response received
-            console.error('Axios error - no response:', {
-                request: error.request,
+            console.error('Axios error - no response received:', {
                 message: error.message,
+                code: error.code,
                 config: {
-                    method: error.config?.method,
+                    method: error.config?.method?.toUpperCase(),
                     url: error.config?.url,
                     baseURL: error.config?.baseURL,
+                    fullURL: error.config?.baseURL + error.config?.url,
                 }
             });
         } else {
             // Error setting up the request
-            console.error('Axios error - request setup failed:', error.message);
+            console.error('Axios error - request setup failed:', {
+                message: error.message,
+                stack: error.stack,
+            });
         }
         
         if (error.response?.status === 401) {

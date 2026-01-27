@@ -83,7 +83,24 @@ export default function MyLeavesPage() {
             setLeaveToCancel(null);
         },
         onError: (error: any) => {
-            toast.error(error.response?.data?.detail || 'Failed to cancel leave');
+            // Better error handling
+            let errorMessage = 'Failed to cancel leave';
+            
+            if (error.response) {
+                // Server responded with error
+                errorMessage = error.response.data?.detail || 
+                              error.response.data?.message || 
+                              error.response.statusText || 
+                              `Server error (${error.response.status})`;
+            } else if (error.request) {
+                // Request made but no response
+                errorMessage = 'No response from server. Please check if the backend is running.';
+            } else {
+                // Error setting up request
+                errorMessage = error.message || 'Request failed';
+            }
+            
+            toast.error(errorMessage);
         },
     });
 

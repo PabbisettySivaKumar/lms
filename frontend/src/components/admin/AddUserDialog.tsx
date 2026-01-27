@@ -44,7 +44,7 @@ const addUserSchema = z.object({
     manager_employee_id: z.string().optional(), // Backend expects manager_employee_id, not manager_id
     joining_date: z.date(),
     password: z.string().min(6, 'Password must be at least 6 characters'),
-    employee_type: z.string().optional().default('Full-time'),
+    employee_type: z.string().optional(),
 });
 
 // Assuming POST /admin/users endpoint structure from previous context
@@ -74,6 +74,7 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
         resolver: zodResolver(addUserSchema),
         defaultValues: {
             role: 'employee',
+            employee_type: 'Full-time',
         },
     });
 
