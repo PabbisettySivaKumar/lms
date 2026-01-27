@@ -3,7 +3,7 @@ Email service using Microsoft Graph API
 This is an alternative to SMTP that works better with Office 365 and MFA
 """
 import os
-import httpx
+import httpx  # type: ignore
 from typing import Optional
 
 # Microsoft Graph API endpoint

@@ -50,7 +50,7 @@ async def get_current_user_email(token: str = Depends(oauth2_scheme)):
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
+        email: str | None = payload.get("sub")
         if email is None:
             raise credentials_exception
         return email
@@ -76,8 +76,8 @@ def create_scope_dependency(required_scopes: List[str]):
         
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            email: str = payload.get("sub")
-            scopes: List[str] = payload.get("scopes", [])
+            email: str | None = payload.get("sub")
+            scopes: List[str] = payload.get("scopes", [])  # type: ignore
             
             if email is None:
                 raise credentials_exception
@@ -136,11 +136,6 @@ async def verify_admin(email: str = Depends(get_current_user_email), db: AsyncSe
         "manager_id": user.manager_id,
     }
 
-
-# Alias for backward compatibility
-require_scope = create_scope_dependency
-
-
 @router.post("/login", response_model=LoginResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
     try:
@@ -186,12 +181,12 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
         requested_scopes = []
         
         # Try to get scope/scopes from form_data
-        if hasattr(form_data, 'scope') and form_data.scope:
+        if hasattr(form_data, 'scope') and getattr(form_data, 'scope', None):
             # scope is a string (space-separated)
-            requested_scopes = form_data.scope.split()
-        elif hasattr(form_data, 'scopes') and form_data.scopes:
+            requested_scopes = getattr(form_data, 'scope', '').split()  # type: ignore
+        elif hasattr(form_data, 'scopes') and getattr(form_data, 'scopes', None):
             # scopes is a list
-            requested_scopes = form_data.scopes
+            requested_scopes = getattr(form_data, 'scopes', [])  # type: ignore
         
         if requested_scopes:
             # Only grant scopes that user's role allows

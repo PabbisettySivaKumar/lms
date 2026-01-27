@@ -68,6 +68,7 @@ ROLE_SCOPES = {
         Scope.READ_POLICIES,
         Scope.WRITE_POLICIES,
         Scope.ACKNOWLEDGE_POLICIES,
+        Scope.EXPORT_DATA,  # HR can export leave reports
     ],
     UserRole.ADMIN: [
         Scope.READ_LEAVES,

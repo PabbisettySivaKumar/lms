@@ -10,12 +10,13 @@ from backend.models.user import User
 from sqlalchemy import select, and_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
 from backend.utils.id_utils import to_int_id
+from datetime import datetime
+from backend.models.job import JobLog
+from backend.services.scheduler import yearly_leave_reset
 
 router = APIRouter(prefix="/admin", tags=["Holidays"])
 
 calendar_router = APIRouter(prefix="/calendar", tags=["Calendar"])
-
-
 
 @router.post("/holidays/bulk", response_model=dict)
 async def bulk_create_holidays(holidays: List[HolidayCreate], admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):
@@ -69,12 +70,6 @@ async def create_holiday(holiday: HolidayCreate, admin=Depends(verify_admin), db
     holiday_id = new_holiday.id
     await db.commit()
     return str(holiday_id)
-
-
-
-from datetime import datetime
-from backend.models.job import JobLog
-from backend.services.scheduler import yearly_leave_reset
 
 @router.delete("/holidays/{holiday_id}")
 async def delete_holiday(holiday_id: str, admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):

@@ -19,12 +19,31 @@
     "reportMissingTypeStubs": "none",
     "executionEnvironments": [
         {
-            "root": ".",
+            "root": "backend",
+            "python": "../venv/bin/python",
             "pythonVersion": "3.13",
             "pythonPlatform": "Darwin",
             "extraPaths": [
-                "backend",
-                "scripts"
+                "../venv/lib/python3.13/site-packages"
+            ]
+        },
+        {
+            "root": "scripts",
+            "python": "../venv/bin/python",
+            "pythonVersion": "3.13",
+            "pythonPlatform": "Darwin",
+            "extraPaths": [
+                "../backend",
+                "../venv/lib/python3.13/site-packages"
+            ]
+        },
+        {
+            "root": ".",
+            "python": "./venv/bin/python",
+            "pythonVersion": "3.13",
+            "pythonPlatform": "Darwin",
+            "extraPaths": [
+                "venv/lib/python3.13/site-packages"
             ]
         }
     ]

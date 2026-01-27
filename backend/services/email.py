@@ -1,15 +1,15 @@
 import os
 from typing import List
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
-from pydantic import EmailStr, BaseModel
-
+from pydantic import EmailStr, BaseModel, SecretStr
+from backend.services.email_graph import send_email_graph
 # Check which email method to use
 EMAIL_METHOD = os.getenv("EMAIL_METHOD", "smtp").lower()  # "smtp" or "graph"
 
 # Load config from env
 conf = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_USERNAME", ""),
-    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD", ""),
+    MAIL_PASSWORD=SecretStr(os.getenv("MAIL_PASSWORD", "")),  # type: ignore
     MAIL_FROM=os.getenv("MAIL_FROM", "noreply@example.com"),
     MAIL_PORT=int(os.getenv("MAIL_PORT", 587)),
     MAIL_SERVER=os.getenv("MAIL_SERVER", "smtp.office365.com"),
@@ -30,7 +30,6 @@ async def send_email(to_email: str, subject: str, body: str, subtype: str = "pla
     if EMAIL_METHOD == "graph":
         # Use Microsoft Graph API
         try:
-            from backend.services.email_graph import send_email_graph
             return await send_email_graph(to_email, subject, body, subtype=subtype)
         except ImportError:
             print("Microsoft Graph API email service not available, falling back to SMTP")
@@ -39,11 +38,14 @@ async def send_email(to_email: str, subject: str, body: str, subtype: str = "pla
     
     # Default: Use SMTP
     try:
-        message = MessageSchema(
+        # Convert string subtype to MessageType enum
+        message_subtype = MessageType.plain if subtype == "plain" else MessageType.html
+        
+        message = MessageSchema(  # type: ignore
             subject=subject,
-            recipients=[to_email],
+            recipients=[to_email],  # type: ignore
             body=body,
-            subtype=subtype
+            subtype=message_subtype  # type: ignore
         )
         
         fm = FastMail(conf)
