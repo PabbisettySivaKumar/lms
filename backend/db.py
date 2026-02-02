@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import logging
 
 # SQLAlchemy imports
+from sqlalchemy import text  # type: ignore
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker  # type: ignore
 from sqlalchemy.orm import declarative_base  # type: ignore
 
@@ -74,6 +75,24 @@ async def get_db() -> AsyncSession:
             raise
         finally:
             await session.close()
+
+
+async def ensure_database_exists():
+    """
+    Create the application database if it does not exist.
+    Connects to MySQL server (using 'mysql' system db) and runs CREATE DATABASE IF NOT EXISTS.
+    Call this before init_db() when the database might not exist yet (e.g. first-time bootstrap).
+    """
+    # Connect without our app database so we can create it (use 'mysql' system database)
+    url_no_db = f"mysql+aiomysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/mysql?charset={MYSQL_CHARSET}"
+    temp_engine = create_async_engine(url_no_db, pool_pre_ping=True)
+    escaped = MYSQL_DATABASE.replace("`", "``")
+    async with temp_engine.begin() as conn:
+        await conn.execute(
+            text("CREATE DATABASE IF NOT EXISTS `{:s}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci".format(escaped))
+        )
+    await temp_engine.dispose()
+    logger.info(f"Database {MYSQL_DATABASE} ensured (created if missing).")
 
 
 async def init_db():

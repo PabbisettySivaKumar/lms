@@ -1,7 +1,7 @@
 """
 User-related SQLAlchemy models
 """
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, ForeignKey, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, ForeignKey, Index, text  # type: ignore
 from sqlalchemy.orm import relationship  # type: ignore
 from datetime import datetime, date
 from backend.db import Base
@@ -33,34 +33,14 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     employee_type = Column(String(50), default="Full-time")
     
-    # Profile
-    profile_picture_url = Column(String(500), nullable=True)
-    dob = Column(Date, nullable=True)
-    blood_group = Column(String(10), nullable=True)
-    
-    # Addresses
-    address = Column(Text, nullable=True, comment="Current address")
-    permanent_address = Column(Text, nullable=True, comment="Permanent address")
-    
-    # Family Details
-    father_name = Column(String(255), nullable=True)
-    father_dob = Column(Date, nullable=True)
-    mother_name = Column(String(255), nullable=True)
-    mother_dob = Column(Date, nullable=True)
-    spouse_name = Column(String(255), nullable=True)
-    spouse_dob = Column(Date, nullable=True)
-    children_names = Column(Text, nullable=True, comment="Comma-separated or JSON array")
-    
-    # Emergency Contact
-    emergency_contact_name = Column(String(255), nullable=True)
-    emergency_contact_phone = Column(String(20), nullable=True)
-    
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default="CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"))
     
     # Relationships
     manager = relationship("User", remote_side=[id], backref="subordinates")
+    profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    staff_roles = relationship("StaffRole", back_populates="user", cascade="all, delete-orphan")
     user_roles = relationship("UserRole", foreign_keys="UserRole.user_id", back_populates="user", cascade="all, delete-orphan")
     leave_balances = relationship("UserLeaveBalance", back_populates="user", cascade="all, delete-orphan")
     leave_requests = relationship("LeaveRequestModel", foreign_keys="LeaveRequestModel.applicant_id", back_populates="applicant")
@@ -82,7 +62,7 @@ class UserDocument(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     name = Column(String(255), nullable=False)
     url = Column(String(500), nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    uploaded_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
         Index("idx_user_id", "user_id"),
@@ -97,6 +77,7 @@ class UserRole(str, Enum):
     HR = "hr"
     ADMIN = "admin"
     FOUNDER = "founder"
+    CO_FOUNDER = "co_founder"
     INTERN = "intern"
     CONTRACT = "contract"
 
@@ -127,6 +108,7 @@ class UserCreateAdmin(BaseModel):
     password: str
     employee_type: str = "Full-time"
     role: UserRole = UserRole.EMPLOYEE
+    dob: Optional[date] = None
     
     @field_validator('role', mode='before')
     @classmethod

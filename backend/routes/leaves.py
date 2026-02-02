@@ -31,6 +31,7 @@ from backend.utils.leave_utils import (
 )
 from sqlalchemy import select, and_, or_, func, desc  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
+from sqlalchemy.orm import selectinload  # type: ignore
 import csv
 import io
 from fastapi.responses import StreamingResponse
@@ -38,7 +39,9 @@ from fastapi.responses import StreamingResponse
 router = APIRouter(prefix="/leaves", tags=["Leaves"])
 
 async def get_current_user(email: str = Depends(get_current_user_email), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    result = await db.execute(
+        select(UserModel).where(UserModel.email == email).options(selectinload(UserModel.profile))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -342,8 +345,10 @@ async def action_leave(
     if action not in ["APPROVE", "REJECT"]:
         raise HTTPException(status_code=400, detail="Invalid action")
     
-    # Get approver user object for additional checks
-    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    # Get approver user object for additional checks (eager-load profile for user_model_to_pydantic)
+    result = await db.execute(
+        select(UserModel).where(UserModel.email == email).options(selectinload(UserModel.profile))
+    )
     approver_model = result.scalar_one_or_none()
     if not approver_model:
         raise HTTPException(status_code=404, detail="Approver not found")
@@ -398,7 +403,7 @@ async def action_leave(
         .where(and_(UserRoleModel.user_id == approver.id, UserRoleModel.is_active == True))
     )
     role_name = role_result.scalar_one_or_none()
-    is_super_approver = role_name in [UserRole.ADMIN.value, UserRole.FOUNDER.value, UserRole.HR.value] if role_name else False
+    is_super_approver = role_name in [UserRole.ADMIN.value, UserRole.FOUNDER.value, UserRole.CO_FOUNDER.value, UserRole.HR.value] if role_name else False
     
     if not (is_assigned_manager or is_super_approver):
          raise HTTPException(status_code=403, detail="You are not authorized to approve this request")
@@ -426,8 +431,10 @@ async def action_leave(
             deductible = float(item.deductible_days)
             leave_type = LeaveType(item.type.value if hasattr(item.type, 'value') else str(item.type))
             
-            # Check balance before deducting
-            applicant_result = await db.execute(select(UserModel).where(UserModel.id == applicant_id))
+            # Check balance before deducting (eager-load profile for user_model_to_pydantic)
+            applicant_result = await db.execute(
+                select(UserModel).where(UserModel.id == applicant_id).options(selectinload(UserModel.profile))
+            )
             applicant = applicant_result.scalar_one_or_none()
             if not applicant:
                 raise HTTPException(status_code=404, detail="Applicant not found")
@@ -436,13 +443,19 @@ async def action_leave(
             await check_balance_sufficient(applicant_user, leave_type, deductible, db)
             
             # Deduct using utility function
-            await update_user_balance(applicant_id, leave_type, deductible, "deduct", db)
-                
+            await update_user_balance(
+                applicant_id, leave_type, deductible, "deduct", db,
+                related_leave_id=item.id, changed_by=approver.id,
+            )
+
         elif current_status == LeaveStatus.CANCELLATION_REQUESTED and new_status_enum == LeaveStatusEnum.CANCELLED:
             # Refund balance - using optimized utility function
             deductible = float(item.deductible_days)
             leave_type = LeaveType(item.type.value if hasattr(item.type, 'value') else str(item.type))
-            await update_user_balance(applicant_id, leave_type, deductible, "refund", db)
+            await update_user_balance(
+                applicant_id, leave_type, deductible, "refund", db,
+                related_leave_id=item.id, changed_by=approver.id,
+            )
         
         # Update leave request
         item.status = new_status_enum
@@ -487,24 +500,31 @@ async def action_leave(
         applicant_id = item.claimant_id
         
         if new_status_enum == CompOffStatusEnum.APPROVED:
-            # Increment comp-off balance in user_leave_balances table
+            # Increment comp-off balance in user_leave_balances table and record history
             from backend.models import UserLeaveBalance
+            from backend.services.balance_history import record_balance_change
+            from backend.models.enums import BalanceChangeTypeEnum
             balance_result = await db.execute(
                 select(UserLeaveBalance).where(
                     and_(UserLeaveBalance.user_id == applicant_id, UserLeaveBalance.leave_type == LeaveTypeEnum.COMP_OFF)
                 )
             )
             balance = balance_result.scalar_one_or_none()
+            prev_comp = float(balance.balance) if balance else 0.0
             if balance:
-                balance.balance = float(balance.balance) + 1.0
+                balance.balance = prev_comp + 1.0
             else:
-                # Create new balance entry
                 new_balance = UserLeaveBalance(
                     user_id=applicant_id,
                     leave_type=LeaveTypeEnum.COMP_OFF,
                     balance=1.0
                 )
                 db.add(new_balance)
+            await record_balance_change(
+                db, applicant_id, LeaveTypeEnum.COMP_OFF, prev_comp, prev_comp + 1.0,
+                BalanceChangeTypeEnum.ACCRUAL, reason="Comp-off claim approved",
+                related_leave_id=None, changed_by=approver.id,
+            )
             
         # Update comp-off claim
         item.status = new_status_enum
@@ -664,7 +684,10 @@ async def cancel_leave(
         
         # Only refund if it was a deductible type (Maternity/Sabbatical are 0 anyway)
         if deductible > 0:
-            await update_user_balance(user.id, leave_type, deductible, "refund", db)
+            await update_user_balance(
+                user.id, leave_type, deductible, "refund", db,
+                related_leave_id=leave.id, changed_by=user.id,
+            )
 
         # Update Status
         leave.status = LeaveStatusEnum.CANCELLED
@@ -712,7 +735,7 @@ async def get_pending_requests(user: UserSchema = Depends(get_current_user), db:
         .where(and_(UserRoleModel.user_id == user.id, UserRoleModel.is_active == True))
     )
     role_name = role_result.scalar_one_or_none()
-    is_god_mode = role_name in [UserRole.ADMIN.value, UserRole.HR.value, UserRole.FOUNDER.value] if role_name else False
+    is_god_mode = role_name in [UserRole.ADMIN.value, UserRole.HR.value, UserRole.FOUNDER.value, UserRole.CO_FOUNDER.value] if role_name else False
     
     # LEAVES QUERY
     leave_query = select(LeaveRequestModel).where(LeaveRequestModel.status == LeaveStatusEnum.PENDING)

@@ -2,6 +2,7 @@ fastapi
 uvicorn
 sqlalchemy[asyncio]
 aiomysql
+pymysql
 alembic
 pydantic[email]
 passlib[bcrypt]

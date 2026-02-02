@@ -20,6 +20,7 @@ from backend.services.email import send_email
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
 from fastapi.security import OAuth2PasswordRequestForm
 
@@ -58,6 +59,17 @@ async def get_current_user_email(token: str = Depends(oauth2_scheme)):
         return email
     except JWTError:
         raise credentials_exception
+
+
+async def get_optional_user_email(token: str | None = Depends(oauth2_scheme_optional)):
+    """Return email from JWT if present; otherwise None. Does not raise 401."""
+    if token is None:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 def create_scope_dependency(required_scopes: List[str]):
@@ -121,7 +133,7 @@ async def verify_admin(email: str = Depends(get_current_user_email), db: AsyncSe
     
     # When selecting multiple models, result.first() returns a tuple
     role_name = user_role_record[1].name  # user_role_record[0] is UserRoleModel, [1] is Role
-    allowed_roles = [UserRole.ADMIN.value, UserRole.FOUNDER.value, UserRole.HR.value]
+    allowed_roles = [UserRole.ADMIN.value, UserRole.FOUNDER.value, UserRole.CO_FOUNDER.value, UserRole.HR.value]
     if role_name.lower() not in allowed_roles:
         raise HTTPException(status_code=403, detail="Admin/HR access required")
     

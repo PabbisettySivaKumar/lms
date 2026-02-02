@@ -3,7 +3,7 @@ Audit log SQLAlchemy model.
 Stores who did what, to which record, when.
 Column order: id, user_id, actor_*, affected_entity_*, action, summary, request_*, old/new_values, created_at.
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index, text  # type: ignore
 from datetime import datetime
 from backend.db import Base
 
@@ -37,7 +37,7 @@ class AuditLog(Base):
 
     old_values = Column(JSON, nullable=True, comment="Previous values before change")
     new_values = Column(JSON, nullable=True, comment="New values after change")
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
 
     __table_args__ = (
         Index("idx_user_id", "user_id"),

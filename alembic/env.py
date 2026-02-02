@@ -15,7 +15,7 @@ load_dotenv()
 from backend.db import Base
 from backend.models import (
     User, Role, RoleScope, UserRole, UserLeaveBalance, UserBalanceHistory,
-    UserDocument, LeaveRequest, CompOffClaim, Holiday, Policy, PolicyDocument,
+    UserDocument, UserProfile, StaffRole, LeaveRequest, CompOffClaim, Holiday, Policy, PolicyDocument,
     PolicyAcknowledgment, JobLog, Notification, LeaveComment, LeaveAttachment,
     AuditLog
 )
@@ -36,11 +36,12 @@ MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "adminadmin")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "leave_management_db")
 
-# Override sqlalchemy.url with environment variables
-config.set_main_option(
-    "sqlalchemy.url",
-    f"mysql+aiomysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
+# Alembic runs synchronously; use sync driver (pymysql) for migrations.
+# The app uses mysql+aiomysql at runtime.
+SYNC_DATABASE_URL = (
+    f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
 )
+config.set_main_option("sqlalchemy.url", SYNC_DATABASE_URL)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

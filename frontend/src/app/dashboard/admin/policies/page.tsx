@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -37,8 +37,6 @@ interface LeavePolicy {
     wfh_quota: number;
     is_active: boolean;
     _id?: string; // Backward compatibility
-    document_url?: string;
-    document_name?: string;
     documents?: Array<{
         id?: number;
         policy_id?: number;
@@ -65,7 +63,7 @@ export default function PoliciesPage() {
     const [searchQuery, setSearchQuery] = useState('');
 
     // Fetch policies using React Query
-    const { data: policies = [], isLoading } = useQuery<LeavePolicy[]>({
+    const { data: policiesData = [], isLoading } = useQuery<LeavePolicy[]>({
         queryKey: ['policies'],
         queryFn: async () => {
             try {
@@ -92,6 +90,35 @@ export default function PoliciesPage() {
         refetchOnMount: true,
         retry: false, // Don't retry on auth errors
     });
+
+    const policies = policiesData;
+
+    // Documents by year (includes years whose leave quota was deleted) — for Policy Documents card only
+    const { data: documentsByYear = [], isLoading: isLoadingDocs } = useQuery<Array<{ year: number; documents: Array<{ id?: number; name: string; url: string; uploaded_at?: string }> }>>({
+        queryKey: ['policies-documents-by-year'],
+        queryFn: async () => {
+            const response = await api.get('/policies/documents-by-year', { headers: { 'Cache-Control': 'no-cache' } });
+            return response.data;
+        },
+        staleTime: 0,
+        refetchOnWindowFocus: true,
+        refetchOnMount: true,
+    });
+
+    // When year or policies change, pre-fill quota inputs from the policy for that year (so saved values are editable)
+    useEffect(() => {
+        const policyForYear = policies.find((p) => p.year === year);
+        if (policyForYear) {
+            setCasualQuota(policyForYear.casual_leave_quota);
+            setSickQuota(policyForYear.sick_leave_quota);
+            setWfhQuota(policyForYear.wfh_quota);
+        } else {
+            // No policy for this year yet: use defaults so admin can set custom values and save
+            setCasualQuota(12);
+            setSickQuota(3);
+            setWfhQuota(2);
+        }
+    }, [year, policies]);
 
     // Fetch acknowledgment report using React Query
     const { data: ackReport = [], isLoading: isReportLoading } = useQuery<any[]>({
@@ -161,7 +188,7 @@ export default function PoliciesPage() {
         },
         successMessage: (_, variables) => `${variables.files.length} document(s) uploaded successfully`,
         errorMessage: "Failed to upload document",
-        invalidateQueries: ['policies'],
+        invalidateQueries: ['policies', 'policies-documents-by-year'],
         onSuccess: async () => {
             setSelectedFiles([]);
             setDocName('');
@@ -170,8 +197,8 @@ export default function PoliciesPage() {
             await new Promise(resolve => setTimeout(resolve, 500));
             // Invalidate and refetch
             queryClient.invalidateQueries({ queryKey: ['policies'] });
-            // Also explicitly refetch
-            await queryClient.refetchQueries({ 
+            queryClient.invalidateQueries({ queryKey: ['policies-documents-by-year'] });
+            await queryClient.refetchQueries({
                 queryKey: ['policies'],
                 type: 'active',
                 exact: false
@@ -189,14 +216,14 @@ export default function PoliciesPage() {
     };
 
     // Delete document mutation
-    const deleteDocumentMutation = useMutationWithToast({
+    const     deleteDocumentMutation = useMutationWithToast({
         mutationFn: async (data: { policyYear: number; docUrl: string }) => {
             await api.delete(`/policies/${data.policyYear}/document?url=${encodeURIComponent(data.docUrl)}`);
             return { success: true };
         },
         successMessage: "Document deleted",
         errorMessage: "Failed to delete document",
-        invalidateQueries: ['policies'],
+        invalidateQueries: ['policies', 'policies-documents-by-year'],
     });
 
     const handleDeleteDocument = async (policyYear: number, docUrl: string) => {
@@ -435,19 +462,10 @@ export default function PoliciesPage() {
                                                         <Button
                                                             variant="ghost"
                                                             size="sm"
-                                                            onClick={() => fetchAckReport(policy.year)}
-                                                            className="h-8 w-8 p-0 text-blue-500 hover:text-blue-700 hover:bg-blue-50 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                            title="View Acknowledgment Report"
-                                                        >
-                                                            <ShieldCheck className="h-4 w-4" />
-                                                        </Button>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="sm"
                                                             onClick={() => handleDeletePolicy(policy.year)}
                                                             disabled={deletePolicyMutation.isPending}
                                                             className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                            title="Delete Policy"
+                                                            title="Delete leave quota (documents are kept)"
                                                         >
                                                             <Trash2 className="h-4 w-4" />
                                                         </Button>
@@ -461,35 +479,37 @@ export default function PoliciesPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Card 4: Document Policies History */}
+                    {/* Card 4: Policy Documents — includes years whose quota was deleted; Acknowledge report here */}
                     <Card>
                         <CardHeader>
                             <CardTitle>Policy Documents</CardTitle>
+                            <CardDescription>Documents by year. Use the shield icon to view acknowledgment report.</CardDescription>
                         </CardHeader>
                         <CardContent>
-                            {isLoading ? (
+                            {isLoadingDocs ? (
                                 <div className="flex justify-center p-4"><LoadingSpinner /></div>
-                            ) : policies.length === 0 ? (
-                                <p className="text-center text-slate-500 py-4">No policies found.</p>
+                            ) : documentsByYear.length === 0 ? (
+                                <p className="text-center text-slate-500 py-4">No documents uploaded for any year.</p>
                             ) : (
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Year</TableHead>
                                             <TableHead>Documents</TableHead>
+                                            <TableHead className="w-[80px]">Report</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {policies.map((policy) => (
-                                            <TableRow key={`doc-${policy.id ?? policy.year}`}>
+                                        {documentsByYear.map((item) => (
+                                            <TableRow key={`doc-${item.year}`} className="group">
                                                 <TableCell className="font-medium align-top">
-                                                    {policy.year}
+                                                    {item.year}
                                                 </TableCell>
                                                 <TableCell className="align-top">
                                                     <div className="space-y-2">
-                                                        {policy.documents && Array.isArray(policy.documents) && policy.documents.length > 0 ? (
-                                                            policy.documents.map((doc, idx) => (
-                                                                <div key={doc.id || doc.url || idx} className="flex items-center justify-between group">
+                                                        {item.documents && item.documents.length > 0 ? (
+                                                            item.documents.map((doc, idx) => (
+                                                                <div key={doc.id || doc.url || idx} className="flex items-center justify-between group/doc">
                                                                     <a
                                                                         href={`/api${doc.url}`}
                                                                         target="_blank"
@@ -502,31 +522,30 @@ export default function PoliciesPage() {
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        onClick={() => handleDeleteDocument(policy.year, doc.url)}
+                                                                        onClick={() => handleDeleteDocument(item.year, doc.url)}
                                                                         disabled={deleteDocumentMutation.isPending}
-                                                                        className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                        className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 opacity-0 group-hover/doc:opacity-100 transition-opacity"
+                                                                        title="Delete document"
                                                                     >
                                                                         <Trash2 className="h-4 w-4" />
                                                                     </Button>
                                                                 </div>
                                                             ))
-                                                        ) : policy.document_url ? (
-                                                            // Fallback for legacy items not yet migrated to documents list
-                                                            <div className="flex items-center justify-between group">
-                                                                <a
-                                                                    href={`/api${policy.document_url}`}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="inline-flex items-center text-blue-600 hover:underline text-sm"
-                                                                >
-                                                                    <FileText className="w-4 h-4 mr-2" />
-                                                                    {policy.document_name || "Official Policy"}
-                                                                </a>
-                                                            </div>
                                                         ) : (
-                                                            <span className="text-slate-400 text-xs italic">No documents uploaded</span>
+                                                            <span className="text-slate-400 text-xs italic">No documents</span>
                                                         )}
                                                     </div>
+                                                </TableCell>
+                                                <TableCell className="align-top">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => fetchAckReport(item.year)}
+                                                        className="h-8 w-8 p-0 text-blue-500 hover:text-blue-700 hover:bg-blue-50"
+                                                        title="View Acknowledgment Report"
+                                                    >
+                                                        <ShieldCheck className="h-4 w-4" />
+                                                    </Button>
                                                 </TableCell>
                                             </TableRow>
                                         ))}
@@ -613,7 +632,7 @@ export default function PoliciesPage() {
                                                 <div className="text-xs space-y-1">
                                                     {row.acknowledgments.length > 0 ? (
                                                         row.acknowledgments.map((ack: any, i: number) => {
-                                                            const docName = policies.find(p => p.year === reportYear)?.documents?.find(d => d.url === ack.document_url)?.name || "Document";
+                                                            const docName = documentsByYear.find(item => item.year === reportYear)?.documents?.find(d => d.url === ack.document_url)?.name || "Document";
                                                             return (
                                                                 <div key={i} className="flex items-center gap-1 text-slate-600">
                                                                     <CheckCircle2 className="w-2.5 h-2.5 text-green-500" />
@@ -659,7 +678,7 @@ export default function PoliciesPage() {
                 onOpenChange={(open) => !open && setPolicyToDelete(null)}
                 onConfirm={confirmDeletePolicy}
                 title="Delete Policy"
-                description={`Are you sure you want to delete the entire policy for ${policyToDelete}? This will also delete all associated documents.`}
+                description={`Are you sure you want to delete the leave policy for ${policyToDelete}? Quotas will be removed from the list. Uploaded documents will be kept.`}
                 confirmText="Delete"
                 variant="destructive"
                 isLoading={deletePolicyMutation.isPending}

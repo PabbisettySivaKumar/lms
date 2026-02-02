@@ -33,6 +33,8 @@ LeaveRequest = LeaveRequestModel
 CompOffClaim = CompOffClaimModel
 # Import User last since it has relationships to many other models
 from .user import User as _UserSQLAlchemy, UserDocument
+from .user_profile import UserProfile
+from .staff_role import StaffRole
 
 # Pydantic Models (from user.py, leave.py, policy.py, etc.)
 from .user import (
@@ -83,6 +85,8 @@ __all__ = [
     # SQLAlchemy Models
     "User",
     "UserDocument",
+    "UserProfile",
+    "StaffRole",
     "Role",
     "RoleScope",
     "UserRole",

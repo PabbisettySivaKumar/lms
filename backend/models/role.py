@@ -1,7 +1,7 @@
 """
 Role-related SQLAlchemy models
 """
-from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, UniqueConstraint, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, UniqueConstraint, Index, text  # type: ignore
 from sqlalchemy.orm import relationship  # type: ignore
 from datetime import datetime
 from backend.db import Base
@@ -16,7 +16,7 @@ class Role(Base):
     display_name = Column(String(100), nullable=False, comment="Human-readable role name")
     description = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     # Relationships
     role_scopes = relationship("RoleScope", back_populates="role", cascade="all, delete-orphan")
@@ -35,7 +35,7 @@ class RoleScope(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     scope_name = Column(String(100), nullable=False, comment="OAuth2 scope name")
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     # Relationships
     role = relationship("Role", back_populates="role_scopes")
@@ -55,7 +55,7 @@ class UserRole(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     assigned_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL", onupdate="CASCADE"), nullable=True, comment="User who assigned this role")
-    assigned_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    assigned_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     is_active = Column(Boolean, default=True)
     
     # Relationships

@@ -8,7 +8,8 @@ from backend.models import (
     User as UserModel, UserRole as UserRoleModel, Role
 )
 from sqlalchemy import select, and_, func  # type: ignore
-from backend.models.policy import LeavePolicy, PolicyDocumentSchema as PolicyDocument
+from sqlalchemy.orm import selectinload  # type: ignore
+from backend.models.policy import LeavePolicy, PolicyDocumentSchema as PolicyDocument, DocumentsByYearItem
 from backend.routes.users import get_current_user, user_model_to_pydantic
 from backend.routes.auth import get_current_user_email
 from backend.models.user import UserSchema as User, UserRole
@@ -26,7 +27,9 @@ async def get_current_user_safe(email: str = Depends(get_current_user_email), db
     """Get current user, converting any 401 errors to 403 to prevent logout."""
     try:
         # Directly query the user and convert to schema (same logic as get_current_user)
-        result = await db.execute(select(UserModel).where(UserModel.email == email))
+        result = await db.execute(
+            select(UserModel).where(UserModel.email == email).options(selectinload(UserModel.profile))
+        )
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(
@@ -97,11 +100,11 @@ async def verify_admin(current_user: User = Depends(get_current_user_safe), db: 
         
         # When selecting multiple models, result.first() returns a tuple
         user_role_name = user_role_record[1].name  # user_role_record[0] is UserRoleModel, [1] is Role
-        allowed_roles = [UserRole.ADMIN.value.lower(), UserRole.FOUNDER.value.lower(), UserRole.HR.value.lower()]
+        allowed_roles = [UserRole.ADMIN.value.lower(), UserRole.FOUNDER.value.lower(), UserRole.CO_FOUNDER.value.lower(), UserRole.HR.value.lower()]
         if user_role_name.lower() not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Operation not permitted. Required role: admin, hr, or founder. Current role: {user_role_name}"
+                detail=f"Operation not permitted. Required role: admin, hr, founder, or co-founder. Current role: {user_role_name}"
             )
         
         return current_user
@@ -131,8 +134,12 @@ async def get_active_policy(response: Response, db: AsyncSession = Depends(get_d
     """
     current_year = datetime.now().year
     
-    # Try to find policy for current year
-    result = await db.execute(select(Policy).where(Policy.year == current_year))
+    # Try to find policy for current year (exclude soft-deleted)
+    result = await db.execute(
+        select(Policy).where(
+            and_(Policy.year == current_year, Policy.is_deleted == False)
+        )
+    )
     policy = result.scalar_one_or_none()
     
     if policy:
@@ -166,8 +173,6 @@ async def get_active_policy(response: Response, db: AsyncSession = Depends(get_d
             sick_leave_quota=policy.sick_leave_quota,
             wfh_quota=policy.wfh_quota,
             is_active=policy.is_active,
-            document_url=policy.document_url,
-            document_name=policy.document_name,
             documents=documents,
             created_at=policy.created_at,
             updated_at=policy.updated_at
@@ -193,9 +198,11 @@ async def get_all_policies(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get all policies with HTTP caching for static data.
+    Get all policies with HTTP caching for static data. Excludes soft-deleted policies.
     """
-    result = await db.execute(select(Policy).order_by(Policy.year.desc()))
+    result = await db.execute(
+        select(Policy).where(Policy.is_deleted == False).order_by(Policy.year.desc())
+    )
     policies_models = result.scalars().all()
     
     policies = []
@@ -229,8 +236,6 @@ async def get_all_policies(
             sick_leave_quota=p.sick_leave_quota,
             wfh_quota=p.wfh_quota,
             is_active=p.is_active,
-            document_url=p.document_url,
-            document_name=p.document_name,
             documents=documents,
             created_at=p.created_at,
             updated_at=p.updated_at
@@ -240,6 +245,47 @@ async def get_all_policies(
     response.headers["Cache-Control"] = "public, max-age=60, must-revalidate"
     return policies
 
+
+@router.get("/documents-by-year", response_model=List[DocumentsByYearItem])
+async def get_documents_by_year(
+    response: Response,
+    current_user: User = Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get documents grouped by year for all years that have at least one document.
+    Includes years whose leave policy was soft-deleted, so Policy Documents UI can show them.
+    """
+    # All policy_ids that have at least one document
+    result = await db.execute(
+        select(PolicyDocumentModel.policy_id).distinct()
+    )
+    policy_ids = [row[0] for row in result.fetchall()]
+    if not policy_ids:
+        response.headers["Cache-Control"] = "public, max-age=60, must-revalidate"
+        return []
+    # Policies (including soft-deleted) for those ids, ordered by year desc
+    result = await db.execute(
+        select(Policy).where(Policy.id.in_(policy_ids)).order_by(Policy.year.desc())
+    )
+    policies = result.scalars().all()
+    out: List[DocumentsByYearItem] = []
+    for p in policies:
+        doc_result = await db.execute(
+            select(PolicyDocumentModel).where(PolicyDocumentModel.policy_id == p.id)
+        )
+        docs = doc_result.scalars().all()
+        out.append(DocumentsByYearItem(
+            year=p.year,
+            documents=[
+                PolicyDocument(id=doc.id, policy_id=doc.policy_id, name=doc.name, url=doc.url, uploaded_at=doc.uploaded_at)
+                for doc in docs
+            ],
+        ))
+    response.headers["Cache-Control"] = "public, max-age=60, must-revalidate"
+    return out
+
+
 @router.post("", response_model=LeavePolicy)
 async def create_or_update_policy(
     request: Request,
@@ -248,7 +294,7 @@ async def create_or_update_policy(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        # Check if policy exists for the year
+        # Check if policy exists for the year (including soft-deleted, so we can restore)
         result = await db.execute(select(Policy).where(Policy.year == policy_data.year))
         existing = result.scalar_one_or_none()
         
@@ -260,13 +306,12 @@ async def create_or_update_policy(
                 "sick_leave_quota": existing.sick_leave_quota,
                 "wfh_quota": existing.wfh_quota,
             }
-            # Update existing policy
+            # Update existing policy (restore if it was soft-deleted)
             existing.casual_leave_quota = policy_data.casual_leave_quota
             existing.sick_leave_quota = policy_data.sick_leave_quota
             existing.wfh_quota = policy_data.wfh_quota
             existing.is_active = policy_data.is_active
-            existing.document_url = policy_data.document_url
-            existing.document_name = policy_data.document_name
+            existing.is_deleted = False  # Restore if was soft-deleted; no-op otherwise
             await audit_log_action(
                 db,
                 "UPDATE_POLICY",
@@ -303,8 +348,6 @@ async def create_or_update_policy(
                 sick_leave_quota=policy_data.sick_leave_quota,
                 wfh_quota=policy_data.wfh_quota,
                 is_active=policy_data.is_active,
-                document_url=policy_data.document_url,
-                document_name=policy_data.document_name
             )
             db.add(new_policy)
             await db.flush()
@@ -363,8 +406,6 @@ async def create_or_update_policy(
             sick_leave_quota=updated.sick_leave_quota,
             wfh_quota=updated.wfh_quota,
             is_active=updated.is_active,
-            document_url=updated.document_url,
-            document_name=updated.document_name,
             documents=documents,
             created_at=updated.created_at,
             updated_at=updated.updated_at
@@ -443,10 +484,6 @@ async def upload_policy_document(
         uploaded_at=datetime.utcnow()
     )
     db.add(new_document)
-    
-    # Update legacy fields in policies table for backward compatibility
-    policy.document_url = document_url
-    policy.document_name = doc_display_name
     await db.commit()
     await db.refresh(policy)
     
@@ -477,8 +514,6 @@ async def upload_policy_document(
         sick_leave_quota=policy.sick_leave_quota,
         wfh_quota=policy.wfh_quota,
         is_active=policy.is_active,
-        document_url=policy.document_url,
-        document_name=policy.document_name,
         documents=documents,
         created_at=policy.created_at,
         updated_at=policy.updated_at
@@ -547,8 +582,6 @@ async def delete_policy_document(
         sick_leave_quota=policy.sick_leave_quota,
         wfh_quota=policy.wfh_quota,
         is_active=policy.is_active,
-        document_url=policy.document_url,
-        document_name=policy.document_name,
         documents=documents,
         created_at=policy.created_at,
         updated_at=policy.updated_at
@@ -561,13 +594,14 @@ async def delete_entire_policy(
     current_user: User = Depends(verify_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    # Find policy to get documents for disk cleanup
+    # Find policy (include soft-deleted so we can re-soft-delete if needed)
     result = await db.execute(select(Policy).where(Policy.year == year))
     policy = result.scalar_one_or_none()
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
+    if getattr(policy, "is_deleted", False):
+        raise HTTPException(status_code=404, detail="Policy already deleted")
     
-    policy_id = policy.id
     await audit_log_action(
         db,
         "DELETE_POLICY",
@@ -583,25 +617,9 @@ async def delete_entire_policy(
         request_method=request.method,
         request_path=request.url.path,
     )
-    
-    # Clean up files from disk - get documents from policy_documents table
-    if policy_id:
-        result = await db.execute(select(PolicyDocumentModel).where(PolicyDocumentModel.policy_id == policy_id))
-        documents = result.scalars().all()
-        for doc in documents:
-            url = doc.url
-            if url and "/static/uploads/policies/" in url:
-                filename = url.split("/static/uploads/policies/")[1]
-                file_path = Path("static/uploads/policies") / filename
-                if file_path.exists():
-                    os.remove(file_path)
-        
-        # Delete all documents from policy_documents table for this policy
-        for doc in documents:
-            await db.delete(doc)
-    
-    # Delete policy
-    await db.delete(policy)
+    # Soft delete: mark policy as deleted and deactivate. Do NOT delete policy_documents or remove files.
+    policy.is_deleted = True
+    policy.is_active = False
     await db.commit()
     log_user_action(
         "DELETE_POLICY",
@@ -612,7 +630,7 @@ async def delete_entire_policy(
         role=getattr(current_user, "role", None),
         year=year,
     )
-    return {"message": f"Policy for year {year} deleted successfully"}
+    return {"message": f"Policy for year {year} deleted successfully. Documents are kept."}
 
 @router.post("/{year}/acknowledge")
 async def acknowledge_policy(
@@ -730,9 +748,6 @@ async def get_acknowledgment_report(
             )
         )
         total_docs = result.scalar() or 0
-        # Fallback to legacy field if no documents
-        if total_docs == 0 and policy.document_url:
-            total_docs = 1
 
     # Get all active employees
     result = await db.execute(select(UserModel).where(UserModel.is_active == True))

@@ -15,17 +15,52 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+# Columns to add: (name, type, comment)
+_COLUMNS = [
+    ("actor_email", sa.String(255), "Email of user who performed the action"),
+    ("actor_employee_id", sa.String(50), "Employee ID of actor"),
+    ("actor_full_name", sa.String(255), "Full name of actor at time of action"),
+    ("actor_role", sa.String(50), "Role of actor at time of action"),
+    ("summary", sa.Text(), "Human-readable one-line summary"),
+    ("request_method", sa.String(10), "e.g. POST, PATCH"),
+    ("request_path", sa.String(500), "e.g. /leaves/5/cancel"),
+]
+
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    r = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c"
+        ),
+        {"t": table, "c": column},
+    ).scalar()
+    return r is not None
+
+
+def _index_exists(conn, index: str, table: str) -> bool:
+    r = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND INDEX_NAME = :idx"
+        ),
+        {"t": table, "idx": index},
+    ).scalar()
+    return r is not None
+
 
 def upgrade() -> None:
-    op.add_column("audit_logs", sa.Column("actor_email", sa.String(255), nullable=True, comment="Email of user who performed the action"))
-    op.add_column("audit_logs", sa.Column("actor_employee_id", sa.String(50), nullable=True, comment="Employee ID of actor"))
-    op.add_column("audit_logs", sa.Column("actor_full_name", sa.String(255), nullable=True, comment="Full name of actor at time of action"))
-    op.add_column("audit_logs", sa.Column("actor_role", sa.String(50), nullable=True, comment="Role of actor at time of action"))
-    op.add_column("audit_logs", sa.Column("summary", sa.Text(), nullable=True, comment="Human-readable one-line summary"))
-    op.add_column("audit_logs", sa.Column("request_method", sa.String(10), nullable=True, comment="e.g. POST, PATCH"))
-    op.add_column("audit_logs", sa.Column("request_path", sa.String(500), nullable=True, comment="e.g. /leaves/5/cancel"))
-    op.create_index("idx_actor_email", "audit_logs", ["actor_email"], unique=False)
-    op.create_index("idx_created_at_action", "audit_logs", ["created_at", "action"], unique=False)
+    conn = op.get_bind()
+    for name, col_type, comment in _COLUMNS:
+        if not _column_exists(conn, "audit_logs", name):
+            op.add_column(
+                "audit_logs",
+                sa.Column(name, col_type, nullable=True, comment=comment),
+            )
+    if not _index_exists(conn, "idx_actor_email", "audit_logs"):
+        op.create_index("idx_actor_email", "audit_logs", ["actor_email"], unique=False)
+    if not _index_exists(conn, "idx_created_at_action", "audit_logs"):
+        op.create_index("idx_created_at_action", "audit_logs", ["created_at", "action"], unique=False)
 
 
 def downgrade() -> None:

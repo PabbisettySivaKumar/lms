@@ -43,6 +43,7 @@ const addUserSchema = z.object({
     role: z.string().transform((val) => val?.toLowerCase() || 'employee'), // Transform to lowercase
     manager_employee_id: z.string().optional(), // Backend expects manager_employee_id, not manager_id
     joining_date: z.date(),
+    dob: z.date().optional(),
     password: z.string().min(6, 'Password must be at least 6 characters'),
     employee_type: z.string().optional(),
 });
@@ -79,6 +80,7 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
     });
 
     const selectedDate = watch('joining_date');
+    const selectedDob = watch('dob');
     const selectedRole = watch('role');
 
     const onSubmit = async (data: UserFormValues) => {
@@ -88,7 +90,7 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
             const roleValue = String(data.role || selectedRole || 'employee').toLowerCase().trim();
             
             // Validate role is one of the allowed values
-            const allowedRoles = ['employee', 'manager', 'hr', 'admin', 'founder', 'intern', 'contract'];
+            const allowedRoles = ['employee', 'manager', 'hr', 'admin', 'founder', 'co_founder', 'intern', 'contract'];
             if (!allowedRoles.includes(roleValue)) {
                 toast.error(`Invalid role: ${roleValue}. Please select a valid role.`);
                 setLoading(false);
@@ -109,6 +111,10 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
             // Only include manager_employee_id if a manager is selected
             if (data.manager_employee_id && data.manager_employee_id !== 'none') {
                 payload.manager_employee_id = data.manager_employee_id;
+            }
+            // Date of birth (optional)
+            if (data.dob) {
+                payload.dob = format(data.dob, 'yyyy-MM-dd');
             }
             
             await api.post('/admin/users', payload);
@@ -178,6 +184,7 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
                                     <SelectItem value="manager">Manager</SelectItem>
                                     <SelectItem value="hr">HR</SelectItem>
                                     <SelectItem value="founder">Founder</SelectItem>
+                                    <SelectItem value="co_founder">Co-founder</SelectItem>
                                     <SelectItem value="admin">Admin</SelectItem>
                                     <SelectItem value="intern">Intern</SelectItem>
                                     <SelectItem value="contract">Contract</SelectItem>
@@ -202,6 +209,39 @@ export function AddUserDialog({ isOpen, onClose, managers }: AddUserDialogProps)
                                 </SelectContent>
                             </Select>
                         </div>
+                    </div>
+
+                    <div className="space-y-2 flex flex-col">
+                        <Label>Date of Birth (Optional)</Label>
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button
+                                    variant={"outline"}
+                                    className={cn(
+                                        "w-full pl-3 text-left font-normal",
+                                        !selectedDob && "text-muted-foreground"
+                                    )}
+                                >
+                                    {selectedDob ? (
+                                        format(selectedDob instanceof Date ? selectedDob : new Date(selectedDob), "PPP")
+                                    ) : (
+                                        <span>Pick date of birth</span>
+                                    )}
+                                    <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0" align="start">
+                                <Calendar
+                                    mode="single"
+                                    selected={selectedDob instanceof Date ? selectedDob : (selectedDob ? new Date(selectedDob) : undefined)}
+                                    onSelect={(date) => setValue('dob', date || undefined)}
+                                    disabled={(date) =>
+                                        date > new Date() || date < new Date("1900-01-01")
+                                    }
+                                    initialFocus
+                                />
+                            </PopoverContent>
+                        </Popover>
                     </div>
 
                     <div className="space-y-2 flex flex-col">

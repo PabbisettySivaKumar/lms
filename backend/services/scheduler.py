@@ -1,6 +1,8 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from backend.db import AsyncSessionLocal
 from backend.models import Policy, UserLeaveBalance, User as UserModel, LeaveTypeEnum
+from backend.models.enums import BalanceChangeTypeEnum
+from backend.services.balance_history import record_balance_change
 from sqlalchemy import select, and_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
 import datetime
@@ -81,19 +83,23 @@ async def monthly_accrual():
                 )
             )
             balance = balance_result.scalar_one_or_none()
-            
+            prev = float(balance.balance) if balance else 0.0
             if balance:
-                balance.balance = float(balance.balance) + monthly_rate
+                balance.balance = prev + monthly_rate
             else:
-                # Create new balance entry
                 new_balance = UserLeaveBalance(
                     user_id=user.id,
                     leave_type=LeaveTypeEnum.CASUAL,
                     balance=monthly_rate
                 )
                 db.add(new_balance)
+            await record_balance_change(
+                db, user.id, LeaveTypeEnum.CASUAL, prev, prev + monthly_rate,
+                BalanceChangeTypeEnum.ACCRUAL, reason="Monthly accrual",
+                related_leave_id=None, changed_by=None,
+            )
             updated_count += 1
-        
+
         await db.commit()
         print(f"--- [Scheduler] Accrual Complete. Updated {updated_count} users. ---")
         return None
@@ -139,7 +145,7 @@ async def yearly_leave_reset():
                     )
                 )
                 balance = balance_result.scalar_one_or_none()
-                
+                prev = float(balance.balance) if balance else 0.0
                 if balance:
                     balance.balance = balance_value
                 else:
@@ -149,7 +155,13 @@ async def yearly_leave_reset():
                         balance=balance_value
                     )
                     db.add(new_balance)
-            
+                if prev != balance_value:
+                    await record_balance_change(
+                        db, user.id, leave_type, prev, balance_value,
+                        BalanceChangeTypeEnum.YEARLY_RESET, reason="Yearly reset",
+                        related_leave_id=None, changed_by=None,
+                    )
+
             # Handle Earned Leave (Carry forward 50%)
             el_result = await db.execute(
                 select(UserLeaveBalance).where(
@@ -165,15 +177,19 @@ async def yearly_leave_reset():
                 old_el = float(el_balance.balance)
                 new_el = old_el / 2.0
                 el_balance.balance = new_el
+                await record_balance_change(
+                    db, user.id, LeaveTypeEnum.EARNED, old_el, new_el,
+                    BalanceChangeTypeEnum.YEARLY_RESET, reason="Carry forward 50%",
+                    related_leave_id=None, changed_by=None,
+                )
             else:
-                # Create new EL balance with 0 (no carry forward if no previous balance)
                 new_el_balance = UserLeaveBalance(
                     user_id=user.id,
                     leave_type=LeaveTypeEnum.EARNED,
                     balance=0.0
                 )
                 db.add(new_el_balance)
-        
+
         await db.commit()
         print(f"[Scheduler] Yearly Reset processed for {len(users)} users.")
     

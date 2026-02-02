@@ -1,7 +1,7 @@
 """
 Balance-related SQLAlchemy models
 """
-from sqlalchemy import Column, Integer, DECIMAL, Text, DateTime, ForeignKey, Enum as SQLEnum, UniqueConstraint, Index  # type: ignore
+from sqlalchemy import Column, Integer, DECIMAL, Text, DateTime, ForeignKey, Enum as SQLEnum, UniqueConstraint, Index, text  # type: ignore
 from sqlalchemy.orm import relationship  # type: ignore
 from datetime import datetime
 from backend.db import Base
@@ -16,7 +16,7 @@ class UserLeaveBalance(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     leave_type = Column(SQLEnum(LeaveTypeEnum), nullable=False)
     balance = Column(DECIMAL(5, 2), nullable=False, default=0.00)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default="CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"))
     
     # Relationships
     user = relationship("User", back_populates="leave_balances")
@@ -42,7 +42,7 @@ class UserBalanceHistory(Base):
     reason = Column(Text, nullable=True)
     related_leave_id = Column(Integer, ForeignKey("leave_requests.id", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
     changed_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
-    changed_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    changed_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
         Index("idx_user_id", "user_id"),

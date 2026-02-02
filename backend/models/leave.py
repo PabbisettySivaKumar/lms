@@ -1,7 +1,7 @@
 """
 Leave-related SQLAlchemy models
 """
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, DECIMAL, ForeignKey, Enum as SQLEnum, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, DECIMAL, ForeignKey, Enum as SQLEnum, Index, text  # type: ignore
 from sqlalchemy.orm import relationship  # type: ignore
 from datetime import datetime, date
 from backend.db import Base
@@ -24,8 +24,8 @@ class LeaveRequestModel(Base):
     deductible_days = Column(DECIMAL(5, 2), nullable=False, default=0.00)
     status = Column(SQLEnum(LeaveStatusEnum), nullable=False, default="PENDING")
     reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default="CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"))
     approved_at = Column(DateTime, nullable=True)
     rejected_at = Column(DateTime, nullable=True)
     
@@ -55,8 +55,8 @@ class CompOffClaimModel(Base):
     work_date = Column(Date, nullable=False, comment="Date on which employee worked")
     reason = Column(Text, nullable=False)
     status = Column(SQLEnum(CompOffStatusEnum), nullable=False, default="PENDING")
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default="CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"))
     approved_at = Column(DateTime, nullable=True)
     
     __table_args__ = (
@@ -78,7 +78,7 @@ class LeaveComment(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     comment = Column(Text, nullable=False)
     is_internal = Column(Boolean, default=False, comment="Internal notes not visible to applicant")
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
         Index("idx_leave_id", "leave_id"),
@@ -99,7 +99,7 @@ class LeaveAttachment(Base):
     file_type = Column(String(50), nullable=True)
     file_size = Column(Integer, nullable=True, comment="File size in bytes")
     uploaded_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    uploaded_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
         Index("idx_leave_id", "leave_id"),

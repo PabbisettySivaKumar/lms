@@ -9,7 +9,7 @@ import os
 # Load env vars
 load_dotenv()
 
-from backend.routes import auth, holidays, leaves, users, policies
+from backend.routes import auth, holidays, leaves, users, policies, manager
 from backend.services.scheduler import start_scheduler, shutdown_scheduler
 from backend.db import init_db, close_db
 from backend.utils.logging_config import setup_logging
@@ -22,8 +22,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    await init_db()  # Initialize SQLAlchemy and create tables
+    # Startup: init_db() creates tables; if DB does not exist yet, skip (bootstrap will create it)
+    try:
+        await init_db()
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "unknown database" in err_msg or "1049" in err_msg or "does not exist" in err_msg:
+            logger.warning("Database not found; run POST /admin/bootstrap to create DB and seed.")
+        else:
+            raise
     start_scheduler()
     logger.info("Application started")
     yield
@@ -74,6 +81,7 @@ async def root():
 
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(manager.router)
 app.include_router(leaves.router)
 app.include_router(holidays.router)
 app.include_router(holidays.calendar_router)

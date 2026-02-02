@@ -26,8 +26,6 @@ interface LeavePolicy {
     is_active: boolean;
     id?: number | string; // Backend returns integer, support both
     _id?: string; // Backward compatibility
-    document_url?: string;
-    document_name?: string;
     documents?: Array<{
         name: string;
         url: string;
@@ -100,7 +98,7 @@ export default function EmployeePoliciesPage() {
         );
     }
 
-    const hasDocuments = (policy?.documents && policy.documents.length > 0) || policy?.document_url;
+    const hasDocuments = policy?.documents && policy.documents.length > 0;
 
     const isAcknowledged = (url: string) => {
         return acknowledgments.some((ack: any) => ack.document_url === url);
@@ -194,39 +192,6 @@ export default function EmployeePoliciesPage() {
                             );
                         })}
 
-                        {/* Fallback for legacy document if not in list */}
-                        {policy?.document_url && (!policy.documents || policy.documents.length === 0) && (
-                            <Card className="flex flex-col border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
-                                <CardHeader>
-                                    <div className="flex justify-between items-start">
-                                        <div className="p-2 bg-blue-50 rounded-full dark:bg-blue-900/30">
-                                            <FileText className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-                                        </div>
-                                    </div>
-                                    <CardTitle className="mt-4 text-lg">{policy.document_name || `Leave Policy ${policy.year}`}</CardTitle>
-                                    <CardDescription>
-                                        Official Policy Document for {policy.year}.
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent className="flex-1">
-                                    <p className="text-sm text-slate-500">
-                                        Primary policy document for {policy.year}.
-                                    </p>
-                                </CardContent>
-                                <CardFooter className="pt-4 border-t bg-slate-50/50 dark:bg-slate-900/20">
-                                    <Button className="w-full" variant="outline" asChild>
-                                        <a
-                                            href={`/api${policy.document_url}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                        >
-                                            <Download className="w-4 h-4 mr-2" />
-                                            View Document
-                                        </a>
-                                    </Button>
-                                </CardFooter>
-                            </Card>
-                        )}
                     </>
                 )}
             </div>

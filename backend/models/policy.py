@@ -1,7 +1,7 @@
 """
 Policy-related SQLAlchemy models
 """
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint, Index, text  # type: ignore
 from sqlalchemy.orm import relationship  # type: ignore
 from datetime import datetime
 from backend.db import Base
@@ -18,7 +18,7 @@ class PolicyDocument(Base):
     policy_id = Column(Integer, ForeignKey("policies.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     name = Column(String(255), nullable=False)
     url = Column(String(500), nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    uploaded_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     # Relationships
     policy = relationship("Policy", back_populates="policy_documents")
@@ -39,10 +39,9 @@ class Policy(Base):
     sick_leave_quota = Column(Integer, nullable=False, default=5)
     wfh_quota = Column(Integer, nullable=False, default=2)
     is_active = Column(Boolean, default=False, comment="Only one policy should be active per year")
-    document_url = Column(String(500), nullable=True)  # Deprecated
-    document_name = Column(String(255), nullable=True)  # Deprecated
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default="CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    is_deleted = Column(Boolean, default=False, nullable=False, comment="Soft delete: hide from list but keep policy and documents")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"))
     
     # Relationships
     policy_documents = relationship("PolicyDocument", back_populates="policy", cascade="all, delete-orphan")
@@ -61,7 +60,7 @@ class PolicyAcknowledgment(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     year = Column(Integer, nullable=False, comment="Policy year")
     document_url = Column(String(500), nullable=False, comment="URL of the acknowledged document")
-    acknowledged_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    acknowledged_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
         UniqueConstraint("user_id", "year", "document_url", name="unique_user_document_year"),
@@ -93,6 +92,15 @@ class _PolicyDocumentPydantic(BaseModel):
 PolicyDocumentSchema = _PolicyDocumentPydantic
 
 
+class DocumentsByYearItem(BaseModel):
+    """Year and its policy documents (used even when policy/quota is soft-deleted)."""
+    year: int
+    documents: List["PolicyDocumentSchema"] = []
+
+    class Config:
+        from_attributes = True
+
+
 class LeavePolicy(BaseModel):
     """Model for policies table"""
     id: Optional[int] = None
@@ -102,12 +110,8 @@ class LeavePolicy(BaseModel):
     wfh_quota: int = 2
     is_active: bool = False
     
-    # Deprecated fields (kept for backward compatibility)
-    document_url: Optional[str] = None
-    document_name: Optional[str] = None
-    
-    # Documents are in separate policy_documents table
-    documents: List["PolicyDocumentSchema"] = []  # This field is not a DB column
+    # Documents live only in policy_documents table; populated from there for API response
+    documents: List["PolicyDocumentSchema"] = []
     
     # Timestamps
     created_at: Optional[datetime] = None

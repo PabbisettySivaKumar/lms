@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Check, X, Loader2 } from 'lucide-react';
+import { Check, X, Loader2, UserCheck, UserX } from 'lucide-react';
 
 import api from '@/lib/axios';
 import { useAuth } from '@/hooks/useAuth';
@@ -41,6 +41,18 @@ interface LeaveRequest {
   reason: string;
 }
 
+interface TeamPresenceMember {
+  id: number;
+  employee_id: string;
+  full_name: string;
+  email: string;
+  presence_status: 'present' | 'on_leave';
+  leave_type?: string | null;
+  leave_start_date?: string | null;
+  leave_end_date?: string | null;
+  date: string;
+}
+
 export default function TeamPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
@@ -52,6 +64,10 @@ export default function TeamPage() {
     id: null,
   });
   const [rejectReason, setRejectReason] = useState('');
+
+  // Team presence date (default: today)
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [presenceDate, setPresenceDate] = useState(todayStr);
 
   // Access Control
   useEffect(() => {
@@ -74,6 +90,16 @@ export default function TeamPage() {
     enabled: !!user,
   });
 
+  // Team presence for selected date
+  const { data: presenceData, isLoading: isPresenceLoading } = useQuery({
+    queryKey: ['manager-team-presence', presenceDate],
+    queryFn: async () => {
+      const res = await api.get<TeamPresenceMember[]>(`/manager/team/presence?date=${presenceDate}`);
+      return res.data;
+    },
+    enabled: !!user && !!presenceDate,
+  });
+
   // Actions
   const actionMutation = useMutation({
     mutationFn: async ({ id, action, note }: { id: number | string; action: 'APPROVE' | 'REJECT'; note?: string }) => {
@@ -93,11 +119,11 @@ export default function TeamPage() {
     }
   });
 
-  const handleApprove = (id: string) => {
-    actionMutation.mutate({ id, action: 'APPROVE' });
+  const handleApprove = (id: string | number) => {
+    actionMutation.mutate({ id: String(id), action: 'APPROVE' });
   };
 
-  const handleRejectClick = (id: string) => {
+  const handleRejectClick = (id: string | number) => {
     setRejectDialog({ isOpen: true, id });
   };
 
@@ -114,6 +140,8 @@ export default function TeamPage() {
   if (isLoading || isDataLoading) {
     return <div className="p-8">Loading team properties...</div>;
   }
+
+  const showPresence = user && ['manager', 'hr', 'founder', 'admin'].includes(user.role);
 
   return (
     <div className="space-y-6">
@@ -193,6 +221,93 @@ export default function TeamPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* Team presence: who is present / on leave on a given day */}
+      {showPresence && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <CardTitle>Team presence</CardTitle>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="presence-date" className="text-sm text-muted-foreground whitespace-nowrap">
+                  Date
+                </Label>
+                <Input
+                  id="presence-date"
+                  type="date"
+                  value={presenceDate}
+                  onChange={(e) => setPresenceDate(e.target.value)}
+                  className="w-[160px]"
+                />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {isPresenceLoading ? (
+              <div className="flex items-center justify-center py-8 text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                Loading presence…
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Employee ID</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Leave (if on leave)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {!presenceData?.length ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                        No direct reports, or they are not assigned to you as manager.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    presenceData.map((member) => (
+                      <TableRow key={member.id}>
+                        <TableCell className="font-medium">{member.full_name}</TableCell>
+                        <TableCell>{member.employee_id}</TableCell>
+                        <TableCell>
+                          {member.presence_status === 'present' ? (
+                            <span className="inline-flex items-center gap-1.5 text-emerald-600">
+                              <UserCheck className="h-4 w-4" />
+                              Present
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-amber-600">
+                              <UserX className="h-4 w-4" />
+                              On leave
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {member.presence_status === 'on_leave' && member.leave_type ? (
+                            <>
+                              {formatLeaveType(member.leave_type)}
+                              {member.leave_start_date && member.leave_end_date && (
+                                <span className="ml-2 text-xs">
+                                  ({member.leave_start_date === member.leave_end_date
+                                    ? member.leave_start_date
+                                    : `${member.leave_start_date} – ${member.leave_end_date}`})
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Rejection Dialog */}
       <Dialog open={rejectDialog.isOpen} onOpenChange={(open) => !open && setRejectDialog({ isOpen: false, id: null })}>

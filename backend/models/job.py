@@ -1,7 +1,7 @@
 """
 Job log SQLAlchemy model
 """
-from sqlalchemy import Column, Integer, String, DateTime, Enum as SQLEnum, JSON, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, DateTime, Enum as SQLEnum, JSON, Index, text  # type: ignore
 from datetime import datetime
 from backend.db import Base
 from backend.models.enums import JobStatusEnum
@@ -15,7 +15,7 @@ class JobLog(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_name = Column(String(255), unique=True, nullable=False, comment="Unique identifier")
-    executed_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    executed_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     status = Column(SQLEnum(JobStatusEnum), nullable=False)
     details = Column(JSON, nullable=True, comment="Audit logs or result summary as JSON")
     executed_by = Column(String(255), nullable=True, comment="User who triggered the job")

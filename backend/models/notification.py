@@ -1,7 +1,7 @@
 """
 Notification SQLAlchemy model
 """
-from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, Enum as SQLEnum, Index  # type: ignore
+from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, Enum as SQLEnum, Index, text  # type: ignore
 from datetime import datetime
 from backend.db import Base
 from backend.models.enums import NotificationTypeEnum
@@ -18,7 +18,7 @@ class Notification(Base):
     message = Column(Text, nullable=False)
     related_leave_id = Column(Integer, ForeignKey("leave_requests.id", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
     is_read = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow, server_default="CURRENT_TIMESTAMP")
+    created_at = Column(DateTime, default=datetime.utcnow, server_default=text("CURRENT_TIMESTAMP"))
     
     __table_args__ = (
         Index("idx_user_id", "user_id"),

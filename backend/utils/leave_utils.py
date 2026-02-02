@@ -12,6 +12,8 @@ from backend.models import (
 from backend.models.leave import LeaveType, LeaveStatus
 from backend.models.user import UserRole
 from backend.models import UserSchema
+from backend.models.enums import BalanceChangeTypeEnum
+from backend.services.balance_history import record_balance_change
 from sqlalchemy import select, and_, or_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
 from fastapi import HTTPException
@@ -188,41 +190,56 @@ async def update_user_balance(
     leave_type: LeaveType,
     days: float,
     operation: str = "deduct",  # "deduct" or "refund"
-    db: AsyncSession = None
+    db: AsyncSession = None,
+    related_leave_id: Optional[int] = None,
+    changed_by: Optional[int] = None,
 ) -> None:
     """
     Update user balance for a leave type.
     Optimized to use single update operation.
+    Records changes in user_balance_history when related_leave_id or changed_by are used.
     """
-    
-    
     balance_field = get_balance_field(leave_type)
     if not balance_field:
         return  # Maternity/Sabbatical don't have balance fields
-    
+
     increment = -days if operation == "deduct" else days
-    
+    change_type = BalanceChangeTypeEnum.DEDUCTION if operation == "deduct" else BalanceChangeTypeEnum.REFUND
+
     # Convert user_id to integer
     user_id_int = to_int_id(user_id)
     if not user_id_int:
         raise ValueError(f"Invalid user ID: {user_id}")
-    
+
     # Use provided db session or create a new one
     if db is None:
         async with AsyncSessionLocal() as session:
-            await _update_balance_internal(session, user_id_int, leave_type, increment)
+            await _update_balance_internal(
+                session, user_id_int, leave_type, increment,
+                change_type=change_type,
+                related_leave_id=related_leave_id,
+                changed_by=changed_by,
+            )
             await session.commit()
     else:
-        await _update_balance_internal(db, user_id_int, leave_type, increment)
+        await _update_balance_internal(
+            db, user_id_int, leave_type, increment,
+            change_type=change_type,
+            related_leave_id=related_leave_id,
+            changed_by=changed_by,
+        )
 
 
 async def _update_balance_internal(
     db: AsyncSession,
     user_id_int: int,
     leave_type: LeaveType,
-    increment: float
+    increment: float,
+    change_type: Optional[BalanceChangeTypeEnum] = None,
+    related_leave_id: Optional[int] = None,
+    changed_by: Optional[int] = None,
 ) -> None:
-    """Internal helper to update balance"""
+    """Internal helper to update balance. Records history when change_type is set."""
     # Special handling for CASUAL: deduct from earned_balance first, then casual_balance
     # For refunds (increment > 0), refund to casual_balance first
     if leave_type == LeaveType.CASUAL:
@@ -244,12 +261,16 @@ async def _update_balance_internal(
             remaining = amount
             
             if earned_balance and float(earned_balance.balance) > 0:
-                # Deduct from earned_balance first
                 earned_deduction = min(float(earned_balance.balance), remaining)
-                earned_balance.balance = float(earned_balance.balance) - earned_deduction
+                prev_earned = float(earned_balance.balance)
+                earned_balance.balance = prev_earned - earned_deduction
+                if change_type:
+                    await record_balance_change(
+                        db, user_id_int, LeaveTypeEnum.EARNED, prev_earned, float(earned_balance.balance),
+                        change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+                    )
                 remaining -= earned_deduction
-            
-            # Deduct remaining from casual_balance
+
             if remaining > 0:
                 casual_result = await db.execute(
                     select(UserLeaveBalance).where(
@@ -260,17 +281,26 @@ async def _update_balance_internal(
                     )
                 )
                 casual_balance = casual_result.scalar_one_or_none()
-                
+                prev_casual = float(casual_balance.balance) if casual_balance else 0.0
                 if casual_balance:
-                    casual_balance.balance = float(casual_balance.balance) - remaining
+                    casual_balance.balance = prev_casual - remaining
+                    if change_type:
+                        await record_balance_change(
+                            db, user_id_int, LeaveTypeEnum.CASUAL, prev_casual, float(casual_balance.balance),
+                            change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+                        )
                 else:
-                    # Create new casual balance record if it doesn't exist
                     new_balance_record = UserLeaveBalance(
                         user_id=user_id_int,
                         leave_type=LeaveTypeEnum.CASUAL,
-                        balance=-remaining  # Negative because we're deducting
+                        balance=-remaining
                     )
                     db.add(new_balance_record)
+                    if change_type:
+                        await record_balance_change(
+                            db, user_id_int, LeaveTypeEnum.CASUAL, 0.0, -remaining,
+                            change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+                        )
         else:
             # Refund: refund proportionally or to casual_balance (simpler: refund to casual_balance)
             # Since we deducted from earned first, we could refund to earned first, but casual is primary
@@ -284,24 +314,29 @@ async def _update_balance_internal(
                 )
             )
             casual_balance = casual_result.scalar_one_or_none()
-            
+            prev_casual = float(casual_balance.balance) if casual_balance else 0.0
             if casual_balance:
-                casual_balance.balance = float(casual_balance.balance) + amount
+                casual_balance.balance = prev_casual + amount
+                if change_type:
+                    await record_balance_change(
+                        db, user_id_int, LeaveTypeEnum.CASUAL, prev_casual, float(casual_balance.balance),
+                        change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+                    )
             else:
-                # Create new casual balance record if it doesn't exist
                 new_balance_record = UserLeaveBalance(
                     user_id=user_id_int,
                     leave_type=LeaveTypeEnum.CASUAL,
                     balance=amount
                 )
                 db.add(new_balance_record)
+                if change_type:
+                    await record_balance_change(
+                        db, user_id_int, LeaveTypeEnum.CASUAL, 0.0, amount,
+                        change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+                    )
         return
-    
-    # For other leave types, use the standard update
-    # Convert leave_type to enum
+
     leave_type_enum = LeaveTypeEnum[leave_type.value]
-    
-    # Get current balance
     result = await db.execute(
         select(UserLeaveBalance).where(
             and_(
@@ -311,19 +346,27 @@ async def _update_balance_internal(
         )
     )
     balance = result.scalar_one_or_none()
-    
+    prev = float(balance.balance) if balance else 0.0
     if balance:
-        # Update existing balance
-        balance.balance = float(balance.balance) + increment
+        balance.balance = prev + increment
+        if change_type:
+            await record_balance_change(
+                db, user_id_int, leave_type_enum, prev, float(balance.balance),
+                change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+            )
     else:
-        # Create new balance record if it doesn't exist
-        new_balance = increment if increment > 0 else 0.0
+        new_balance_val = increment if increment > 0 else 0.0
         new_balance_record = UserLeaveBalance(
             user_id=user_id_int,
             leave_type=leave_type_enum,
-            balance=new_balance
+            balance=new_balance_val
         )
         db.add(new_balance_record)
+        if change_type:
+            await record_balance_change(
+                db, user_id_int, leave_type_enum, 0.0, new_balance_val,
+                change_type, reason=None, related_leave_id=related_leave_id, changed_by=changed_by,
+            )
 
 
 async def check_balance_sufficient(

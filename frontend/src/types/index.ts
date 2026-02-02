@@ -61,7 +61,7 @@ export interface ManagerData {
     role?: string;
 }
 
-export type UserRole = 'employee' | 'manager' | 'hr' | 'founder' | 'admin' | 'intern' | 'contract';
+export type UserRole = 'employee' | 'manager' | 'hr' | 'founder' | 'co_founder' | 'admin' | 'intern' | 'contract';
 
 export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CANCELLATION_REQUESTED';
 

@@ -1,18 +1,22 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Security, Request
 from typing import List, Optional
 from datetime import datetime
-from backend.db import get_db, AsyncSessionLocal
-from backend.models import User as UserModel, UserRole as UserRoleModel, Role, UserLeaveBalance, UserDocument, Policy, LeaveTypeEnum, UserSchema
+from backend.db import get_db, AsyncSessionLocal, ensure_database_exists, init_db
+from backend.models import User as UserModel, UserRole as UserRoleModel, Role, UserLeaveBalance, UserDocument, Policy, LeaveTypeEnum, UserSchema, StaffRole
 from backend.models.user import UserCreateAdmin, UserRole
+from backend.models.enums import BalanceChangeTypeEnum
+from backend.services.balance_history import record_balance_change
 from backend.utils.security import get_password_hash
-from backend.routes.auth import get_current_user_email, verify_admin, create_scope_dependency
+from backend.routes.auth import get_current_user_email, get_optional_user_email, verify_admin, create_scope_dependency
 from backend.utils.scopes import Scope
 from backend.utils.id_utils import to_int_id
 from backend.services.audit import log_action as audit_log_action
+from backend.services.seed import run_seed_roles, run_seed_admin, ADMIN_EMAIL, ADMIN_EMPLOYEE_ID
 from backend.utils.action_log import log_user_action
 from fastapi import UploadFile, File
 from sqlalchemy import select, func, and_, or_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
+from sqlalchemy.orm import selectinload  # type: ignore
 import shutil
 from pathlib import Path
 import os
@@ -103,20 +107,20 @@ async def user_model_to_pydantic(user: UserModel, db: AsyncSession) -> UserSchem
         manager_id=user.manager_id,
         joining_date=user.joining_date,
         employee_type=user.employee_type,
-        profile_picture_url=user.profile_picture_url,
-        dob=user.dob,
-        blood_group=user.blood_group,
-        address=user.address,
-        permanent_address=user.permanent_address,
-        father_name=user.father_name,
-        father_dob=user.father_dob,
-        mother_name=user.mother_name,
-        mother_dob=user.mother_dob,
-        spouse_name=user.spouse_name,
-        spouse_dob=user.spouse_dob,
-        children_names=user.children_names,
-        emergency_contact_name=user.emergency_contact_name,
-        emergency_contact_phone=user.emergency_contact_phone,
+        profile_picture_url=user.profile.profile_picture_url if user.profile else None,
+        dob=user.profile.dob if user.profile else None,
+        blood_group=user.profile.blood_group if user.profile else None,
+        address=user.profile.address if user.profile else None,
+        permanent_address=user.profile.permanent_address if user.profile else None,
+        father_name=user.profile.father_name if user.profile else None,
+        father_dob=user.profile.father_dob if user.profile else None,
+        mother_name=user.profile.mother_name if user.profile else None,
+        mother_dob=user.profile.mother_dob if user.profile else None,
+        spouse_name=user.profile.spouse_name if user.profile else None,
+        spouse_dob=user.profile.spouse_dob if user.profile else None,
+        children_names=user.profile.children_names if user.profile else None,
+        emergency_contact_name=user.profile.emergency_contact_name if user.profile else None,
+        emergency_contact_phone=user.profile.emergency_contact_phone if user.profile else None,
         created_at=user.created_at,
         updated_at=user.updated_at,
         casual_balance=casual_balance,
@@ -129,7 +133,9 @@ async def user_model_to_pydantic(user: UserModel, db: AsyncSession) -> UserSchem
     )
 
 async def get_current_user(email: str = Depends(get_current_user_email), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    result = await db.execute(
+        select(UserModel).where(UserModel.email == email).options(selectinload(UserModel.profile))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -151,7 +157,9 @@ async def update_user_me(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        result = await db.execute(select(UserModel).where(UserModel.id == current_user.id))
+        result = await db.execute(
+            select(UserModel).where(UserModel.id == current_user.id).options(selectinload(UserModel.profile))
+        )
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -166,17 +174,34 @@ async def update_user_me(
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
         
+        # Profile fields live in user_profiles; full_name lives in users
+        from backend.models import UserProfile
+        profile_fields = {"dob", "blood_group", "address", "permanent_address", "father_name", "father_dob", "mother_name", "mother_dob", "spouse_name", "spouse_dob", "children_names", "emergency_contact_name", "emergency_contact_phone"}
+        user_fields = {"full_name"}
         # Capture old values before update (for audit)
         old_values = {}
         for key in update_data.keys():
-            if hasattr(user, key):
+            if key in user_fields and hasattr(user, key):
                 val = getattr(user, key)
                 old_values[key] = val.isoformat() if hasattr(val, "isoformat") else val
-
-        # Update user fields
-        for key, value in update_data.items():
-            if hasattr(user, key):
-                setattr(user, key, value)
+            if key in profile_fields:
+                prof = user.profile
+                if prof and hasattr(prof, key):
+                    val = getattr(prof, key)
+                    old_values[key] = val.isoformat() if hasattr(val, "isoformat") else val
+        # Get or create profile for profile updates
+        if any(k in profile_fields for k in update_data):
+            if not user.profile:
+                user.profile = UserProfile(user_id=user.id)
+                db.add(user.profile)
+        # Update user fields (users table)
+        for key in user_fields:
+            if key in update_data and hasattr(user, key):
+                setattr(user, key, update_data[key])
+        # Update profile fields (user_profiles table)
+        for key in profile_fields:
+            if key in update_data and user.profile and hasattr(user.profile, key):
+                setattr(user.profile, key, update_data[key])
 
         await audit_log_action(
             db,
@@ -250,12 +275,19 @@ async def upload_profile_picture(
     base_url = "/static/uploads/profile_pictures"
     full_url = f"{base_url}/{filename}"
     
-    result = await db.execute(select(UserModel).where(UserModel.id == current_user.id))
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == current_user.id).options(selectinload(UserModel.profile))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    user.profile_picture_url = full_url
+    # Get or create user profile
+    from backend.models import UserProfile
+    if not user.profile:
+        user.profile = UserProfile(user_id=user.id)
+        db.add(user.profile)
+    user.profile.profile_picture_url = full_url
     await db.commit()
     await db.refresh(user)
     
@@ -289,7 +321,7 @@ async def create_user_admin(
             # Provide helpful error message with available managers
             available_managers = []
             try:
-                manager_role_names = [UserRole.MANAGER.value, UserRole.HR.value, UserRole.FOUNDER.value, UserRole.ADMIN.value]
+                manager_role_names = [UserRole.MANAGER.value, UserRole.HR.value, UserRole.FOUNDER.value, UserRole.CO_FOUNDER.value, UserRole.ADMIN.value]
                 # Get role IDs
                 role_result = await db.execute(select(Role).where(Role.name.in_(manager_role_names)))
                 roles = role_result.scalars().all()
@@ -364,6 +396,13 @@ async def create_user_admin(
     await db.flush()  # Flush to get the ID
     user_id = new_user.id
     
+    # Step 1b: Create user profile (1:1 with user)
+    from backend.models import UserProfile
+    profile_kwargs: dict = {"user_id": user_id}
+    if getattr(user_in, "dob", None) is not None:
+        profile_kwargs["dob"] = user_in.dob
+    db.add(UserProfile(**profile_kwargs))
+    
     # Step 2: Assign role to user
     # Role is already normalized to UserRole enum by Pydantic validator
     role_name = user_in.role.value if user_in.role else UserRole.EMPLOYEE.value
@@ -379,6 +418,9 @@ async def create_user_admin(
         assigned_by=None
     )
     db.add(user_role)
+    # Sync staff_roles for non-employee roles (founder, co_founder, hr, manager, admin)
+    if role_name in ("founder", "co_founder", "hr", "manager", "admin"):
+        db.add(StaffRole(user_id=user_id, role_type=role_name, is_active=True))
     
     # Step 3: Create leave balances
     balances = [
@@ -392,6 +434,20 @@ async def create_user_admin(
 
     admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
     admin_user = admin_result.scalar_one_or_none()
+    # Record initial balance allocation in user_balance_history
+    for lt, val in [
+        (LeaveTypeEnum.CASUAL, initial_cl),
+        (LeaveTypeEnum.SICK, sick_quota),
+        (LeaveTypeEnum.EARNED, 0.0),
+        (LeaveTypeEnum.WFH, wfh_quota),
+        (LeaveTypeEnum.COMP_OFF, 0.0),
+    ]:
+        if val != 0:
+            await record_balance_change(
+                db, user_id, lt, 0.0, float(val), BalanceChangeTypeEnum.INITIAL,
+                reason="Initial allocation", changed_by=admin_user.id if admin_user else None
+            )
+
     await audit_log_action(
         db,
         "CREATE_USER",
@@ -419,13 +475,21 @@ async def create_user_admin(
             created_email=new_user.email,
             created_employee_id=new_user.employee_id,
         )
-    return await user_model_to_pydantic(new_user, db)
+    # Refetch with profile loaded (avoid lazy load in user_model_to_pydantic)
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == new_user.id).options(selectinload(UserModel.profile))
+    )
+    user_for_response = result.scalar_one_or_none()
+    if user_for_response is None:
+        await db.refresh(new_user, attribute_names=["profile"])
+        user_for_response = new_user
+    return await user_model_to_pydantic(user_for_response, db)
 
 @router.get("/admin/managers", response_model=List[dict])
 async def list_managers(admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):
     managers = []
     # Get role IDs for manager, HR, and founder roles
-    role_names = [UserRole.MANAGER.value, UserRole.HR.value, UserRole.FOUNDER.value]
+    role_names = [UserRole.MANAGER.value, UserRole.HR.value, UserRole.FOUNDER.value, UserRole.CO_FOUNDER.value]
     role_result = await db.execute(select(Role).where(Role.name.in_(role_names)))
     manager_roles = role_result.scalars().all()
     
@@ -463,8 +527,8 @@ async def list_users(
     """
     List users with pagination and optional search.
     """
-    # Build query
-    query = select(UserModel)
+    # Build query (eager-load profile to avoid async lazy-load in user_model_to_pydantic)
+    query = select(UserModel).options(selectinload(UserModel.profile))
     if search:
         # Case-insensitive search across name, email, employee_id
         search_pattern = f"%{search}%"
@@ -513,7 +577,9 @@ async def update_user_balance(
     if not user_id_int:
         raise HTTPException(status_code=400, detail="Invalid user ID")
         
-    result = await db.execute(select(UserModel).where(UserModel.id == user_id_int))
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id_int).options(selectinload(UserModel.profile))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -549,6 +615,9 @@ async def update_user_balance(
             bal = balance_result.scalar_one_or_none()
             old_values[field_name] = float(bal.balance) if bal else 0.0
 
+    admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
+    admin_user = admin_result.scalar_one_or_none()
+
     # Update balances in user_leave_balances table
     for field_name, balance_value in update_data.items():
         if field_name in leave_type_map:
@@ -561,16 +630,22 @@ async def update_user_balance(
             )
             balance = balance_result.scalar_one_or_none()
             
+            prev = float(balance.balance) if balance else 0.0
+            new_val = float(balance_value)
             if balance:
-                balance.balance = float(balance_value)
+                balance.balance = new_val
             else:
                 # Create new balance entry
                 new_balance = UserLeaveBalance(
                     user_id=user_id_int,
                     leave_type=leave_type,
-                    balance=float(balance_value)
+                    balance=new_val
                 )
                 db.add(new_balance)
+            await record_balance_change(
+                db, user_id_int, leave_type, prev, new_val, BalanceChangeTypeEnum.MANUAL_ADJUSTMENT,
+                reason="Admin balance update", changed_by=admin_user.id if admin_user else None
+            )
 
     admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
     admin_user = admin_result.scalar_one_or_none()
@@ -648,8 +723,10 @@ async def upload_documents(
     
     await db.commit()
     
-    # Fetch updated user
-    result = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    # Fetch updated user (eager-load profile for user_model_to_pydantic)
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id).options(selectinload(UserModel.profile))
+    )
     updated_user = result.scalar_one_or_none()
     if not updated_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -696,8 +773,10 @@ async def delete_document(
     await db.delete(document)
     await db.commit()
     
-    # Fetch updated user
-    result = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    # Fetch updated user (eager-load profile for user_model_to_pydantic)
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id).options(selectinload(UserModel.profile))
+    )
     updated_user = result.scalar_one_or_none()
     if not updated_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -783,12 +862,16 @@ async def update_user_details(
     if not user_id_int:
         raise HTTPException(status_code=400, detail=f"Invalid user ID format: '{user_id}' (must be an integer)")
 
-    # Query by id
-    result = await db.execute(select(UserModel).where(UserModel.id == user_id_int))
+    # Query by id (eager-load profile for user_model_to_pydantic)
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id_int).options(selectinload(UserModel.profile))
+    )
     existing_user = result.scalar_one_or_none()
     if not existing_user:
         # Try to find by employee_id as fallback
-        result = await db.execute(select(UserModel).where(UserModel.employee_id == user_id))
+        result = await db.execute(
+            select(UserModel).where(UserModel.employee_id == user_id).options(selectinload(UserModel.profile))
+        )
         existing_user = result.scalar_one_or_none()
         if existing_user:
             user_id_int = existing_user.id
@@ -865,6 +948,23 @@ async def update_user_details(
                     assigned_by=None
                 )
                 db.add(new_user_role)
+            # Sync staff_roles: add for founder/hr/manager/admin, deactivate for others
+            staff_role_result = await db.execute(
+                select(StaffRole).where(StaffRole.user_id == user_id_int)
+            )
+            for sr in staff_role_result.scalars().all():
+                sr.is_active = False
+            if role_name in ("founder", "co_founder", "hr", "manager", "admin"):
+                existing_sr_result = await db.execute(
+                    select(StaffRole).where(
+                        and_(StaffRole.user_id == user_id_int, StaffRole.role_type == role_name)
+                    )
+                )
+                existing_sr = existing_sr_result.scalar_one_or_none()
+                if existing_sr:
+                    existing_sr.is_active = True
+                else:
+                    db.add(StaffRole(user_id=user_id_int, role_type=role_name, is_active=True))
 
     # Handle manager linking
     manager_employee_id = user_data.manager_employee_id
@@ -917,26 +1017,48 @@ async def update_user_details(
     if not update_dict:
         return await user_model_to_pydantic(existing_user, db)
 
+    # Profile fields live in user_profiles; the rest are user (users table) fields
+    profile_fields = {"dob", "blood_group", "address", "permanent_address", "father_name", "father_dob", "mother_name", "mother_dob", "spouse_name", "spouse_dob", "children_names", "emergency_contact_name", "emergency_contact_phone"}
+    profile_update = {k: v for k, v in update_dict.items() if k in profile_fields}
+    user_update = {k: v for k, v in update_dict.items() if k not in profile_fields}
+
     # Capture old values before update (for audit)
-    old_values_user = {k: getattr(existing_user, k) for k in update_dict.keys() if hasattr(existing_user, k)}
+    old_values_user = {k: getattr(existing_user, k) for k in user_update.keys() if hasattr(existing_user, k)}
     for k, v in list(old_values_user.items()):
         if hasattr(v, "isoformat"):
             old_values_user[k] = v.isoformat()
+    old_values_profile = {}
+    if profile_update and existing_user.profile:
+        old_values_profile = {k: getattr(existing_user.profile, k) for k in profile_update.keys() if hasattr(existing_user.profile, k)}
+        for k, v in list(old_values_profile.items()):
+            if hasattr(v, "isoformat"):
+                old_values_profile[k] = v.isoformat()
 
-    # Update user fields
-    for key, value in update_dict.items():
+    # Update user fields (users table)
+    for key, value in user_update.items():
         if hasattr(existing_user, key):
             setattr(existing_user, key, value)
 
+    # Update profile fields (user_profiles table)
+    if profile_update:
+        from backend.models import UserProfile
+        if not existing_user.profile:
+            existing_user.profile = UserProfile(user_id=existing_user.id)
+            db.add(existing_user.profile)
+        for key, value in profile_update.items():
+            if hasattr(existing_user.profile, key):
+                setattr(existing_user.profile, key, value)
+
     admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
     admin_user = admin_result.scalar_one_or_none()
+    old_values_merged = {**old_values_user, **old_values_profile}
     await audit_log_action(
         db,
         "UPDATE_USER",
         "USER",
         user_id=admin_user.id if admin_user else None,
         affected_entity_id=existing_user.id,
-        old_values=old_values_user,
+        old_values=old_values_merged,
         new_values=update_dict,
         actor_email=admin_user.email if admin_user else None,
         actor_employee_id=admin_user.employee_id if admin_user else None,
@@ -958,7 +1080,115 @@ async def update_user_details(
             target_email=existing_user.email,
             updated_fields=list(update_dict.keys()),
         )
-    return await user_model_to_pydantic(existing_user, db)
+    # Refetch with profile loaded (refresh expires attributes; avoid async lazy load)
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id_int).options(selectinload(UserModel.profile))
+    )
+    user_for_response = result.scalar_one_or_none()
+    return await user_model_to_pydantic(user_for_response or existing_user, db)
+
+
+STAFF_ROLE_NAMES = ("founder", "co_founder", "hr", "manager", "admin")
+
+
+async def _bootstrap_auth_optional(
+    email: Optional[str] = Depends(get_optional_user_email),
+    db: AsyncSession = Depends(get_db),
+):
+    """Allow unauthenticated when ALLOW_BOOTSTRAP_NO_AUTH=true (first-time deploy); else require admin."""
+    import os
+    allow_no_auth = os.getenv("ALLOW_BOOTSTRAP_NO_AUTH", "").strip().lower() in ("1", "true", "yes")
+    if email is None:
+        if allow_no_auth:
+            return None
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credentials required")
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    role_result = await db.execute(
+        select(UserRoleModel, Role)
+        .join(Role, UserRoleModel.role_id == Role.id)
+        .where(UserRoleModel.user_id == user.id, UserRoleModel.is_active == True)
+    )
+    row = role_result.first()
+    if not row:
+        raise HTTPException(status_code=403, detail="User has no active role")
+    role_name = row[1].name.lower()
+    if role_name not in ("admin", "founder", "co_founder", "hr"):
+        raise HTTPException(status_code=403, detail="Admin/founder/co-founder/hr access required")
+    return {"id": user.id, "email": user.email, "full_name": user.full_name, "employee_id": user.employee_id}
+
+
+@router.post("/admin/bootstrap", response_model=dict)
+async def bootstrap(_auth=Depends(_bootstrap_auth_optional)):
+    """
+    Full bootstrap: create database if missing, create all tables, then seed roles and admin user.
+    Safe to run multiple times (idempotent).
+    - When at least one admin exists: requires admin/founder/hr auth.
+    - First-time (no admin yet): set ALLOW_BOOTSTRAP_NO_AUTH=true and call without auth once; then unset.
+    """
+    await ensure_database_exists()
+    await init_db()
+    async with AsyncSessionLocal() as db:
+        roles_created, scopes_added = await run_seed_roles(db)
+        admin_created = await run_seed_admin(db)
+        await db.commit()
+    return {
+        "message": "Bootstrap complete",
+        "database_created": True,
+        "tables_created": True,
+        "roles_created": roles_created,
+        "scopes_added": scopes_added,
+        "admin_created": admin_created,
+        "admin_email": ADMIN_EMAIL if admin_created else None,
+        "admin_employee_id": ADMIN_EMPLOYEE_ID if admin_created else None,
+    }
+
+
+@router.post("/admin/backfill-staff-roles", response_model=dict)
+async def backfill_staff_roles(
+    admin=Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    One-time backfill: copy staff roles from user_roles into staff_roles
+    for users who have founder, hr, manager, or admin role.
+    Safe to run multiple times (idempotent).
+    """
+    role_result = await db.execute(
+        select(Role.id, Role.name).where(Role.name.in_(STAFF_ROLE_NAMES))
+    )
+    role_ids_by_name = {name: rid for rid, name in role_result.all()}
+    if not role_ids_by_name:
+        return {"message": "No staff roles (founder/hr/manager/admin) in roles table", "inserted": 0}
+    user_roles_result = await db.execute(
+        select(UserRoleModel.user_id, Role.name)
+        .join(Role, UserRoleModel.role_id == Role.id)
+        .where(
+            and_(
+                UserRoleModel.role_id.in_(role_ids_by_name.values()),
+                UserRoleModel.is_active == True,
+            )
+        )
+    )
+    pairs = [(row.user_id, row.name) for row in user_roles_result.all()]
+    inserted = 0
+    for user_id, role_name in pairs:
+        existing = await db.execute(
+            select(StaffRole).where(
+                and_(StaffRole.user_id == user_id, StaffRole.role_type == role_name)
+            )
+        )
+        if existing.scalar_one_or_none() is None:
+            db.add(StaffRole(user_id=user_id, role_type=role_name, is_active=True))
+            inserted += 1
+        else:
+            # Ensure is_active
+            existing.scalar_one_or_none().is_active = True
+    await db.commit()
+    return {"message": f"Backfill complete. Inserted {inserted} staff_role rows.", "inserted": inserted}
+
 
 @router.get("/admin/integrity-check")
 async def check_data_integrity(admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):

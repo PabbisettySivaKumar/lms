@@ -35,6 +35,7 @@ const schema = z.object({
     role: z.string().min(1, 'Role is required'),
     manager_id: z.string().optional().nullable(), // Allow null
     joining_date: z.string().optional(),
+    dob: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -97,7 +98,8 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
                 employee_id: user.employee_id,
                 role: user.role,
                 manager_id: managerEmployeeId,
-                joining_date: user.joining_date || undefined
+                joining_date: user.joining_date || undefined,
+                dob: user.dob || undefined
             });
         }
     }, [user, isOpen, reset, managers]);
@@ -114,6 +116,8 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
                 role: data.role?.toLowerCase(), // Ensure lowercase
                 joining_date: data.joining_date,
             };
+            // Send dob so it can be updated or cleared (null to clear)
+            payload.dob = data.dob && data.dob.trim() !== '' ? data.dob : null;
             
             // Handle manager - backend expects manager_employee_id, not manager_id
             if (data.manager_id && data.manager_id !== 'none') {
@@ -183,6 +187,7 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
                                     <SelectItem value="manager">Manager</SelectItem>
                                     <SelectItem value="hr">HR</SelectItem>
                                     <SelectItem value="founder">Founder</SelectItem>
+                                    <SelectItem value="co_founder">Co-founder</SelectItem>
                                     <SelectItem value="contract">Contractor</SelectItem>
                                     <SelectItem value="intern">Intern</SelectItem>
                                     <SelectItem value="admin">Admin</SelectItem>
@@ -193,6 +198,11 @@ export default function EditUserDialog({ user, isOpen, onClose, onSuccess }: Edi
                             <Label>Joining Date</Label>
                             <Input type="date" {...register('joining_date')} />
                         </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Date of Birth</Label>
+                        <Input type="date" {...register('dob')} />
                     </div>
 
                     <div className="space-y-2">
