@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends, Response
+from fastapi import APIRouter, HTTPException, Depends, Response, Request
 from typing import List
 from backend.db import get_db, AsyncSessionLocal
+from backend.services.audit import log_action as audit_log_action
+from backend.utils.action_log import log_user_action
 from backend.models import Holiday as HolidayModel, JobLog as JobLogModel, JobStatusEnum
 from backend.models.leave import Holiday, HolidayCreate
 from backend.models.user import UserRole
@@ -19,7 +21,12 @@ router = APIRouter(prefix="/admin", tags=["Holidays"])
 calendar_router = APIRouter(prefix="/calendar", tags=["Calendar"])
 
 @router.post("/holidays/bulk", response_model=dict)
-async def bulk_create_holidays(holidays: List[HolidayCreate], admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):
+async def bulk_create_holidays(
+    request: Request,
+    holidays: List[HolidayCreate],
+    admin=Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Bulk import holidays. Skips duplicates based on date.
     """
@@ -42,8 +49,37 @@ async def bulk_create_holidays(holidays: List[HolidayCreate], admin=Depends(veri
         )
         db.add(new_holiday)
         inserted_count += 1
-    
+
+    admin_id = admin.get("id") if isinstance(admin, dict) else getattr(admin, "id", None)
+    admin_email = admin.get("email") if isinstance(admin, dict) else getattr(admin, "email", None)
+    admin_name = admin.get("full_name") if isinstance(admin, dict) else getattr(admin, "full_name", None)
+    admin_emp_id = admin.get("employee_id") if isinstance(admin, dict) else getattr(admin, "employee_id", None)
+    await audit_log_action(
+        db,
+        "BULK_CREATE_HOLIDAYS",
+        "HOLIDAY",
+        user_id=admin_id,
+        new_values={"count": inserted_count, "errors": errors},
+        actor_email=admin_email,
+        actor_employee_id=admin_emp_id,
+        actor_full_name=admin_name,
+        summary=f"{admin_name or 'Admin'} bulk created {inserted_count} holiday(s)" if admin_name else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
+    admin_email = admin.get("email") if isinstance(admin, dict) else getattr(admin, "email", None)
+    admin_name = admin.get("full_name") if isinstance(admin, dict) else getattr(admin, "full_name", None)
+    admin_emp_id = admin.get("employee_id") if isinstance(admin, dict) else getattr(admin, "employee_id", None)
+    log_user_action(
+        "BULK_CREATE_HOLIDAYS",
+        user_id=admin_id,
+        email=admin_email,
+        employee_id=admin_emp_id,
+        full_name=admin_name,
+        count=inserted_count,
+        errors_count=len(errors),
+    )
         
     return {
         "success": True, 
@@ -52,7 +88,12 @@ async def bulk_create_holidays(holidays: List[HolidayCreate], admin=Depends(veri
     }
 
 @router.post("/holidays", response_model=str)
-async def create_holiday(holiday: HolidayCreate, admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):
+async def create_holiday(
+    request: Request,
+    holiday: HolidayCreate,
+    admin=Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
     # Check if exists
     result = await db.execute(select(HolidayModel).where(HolidayModel.date == holiday.date))
     existing = result.scalar_one_or_none()
@@ -68,11 +109,47 @@ async def create_holiday(holiday: HolidayCreate, admin=Depends(verify_admin), db
     db.add(new_holiday)
     await db.flush()
     holiday_id = new_holiday.id
+    admin_id = admin.get("id") if isinstance(admin, dict) else getattr(admin, "id", None)
+    admin_email = admin.get("email") if isinstance(admin, dict) else getattr(admin, "email", None)
+    admin_name = admin.get("full_name") if isinstance(admin, dict) else getattr(admin, "full_name", None)
+    admin_emp_id = admin.get("employee_id") if isinstance(admin, dict) else getattr(admin, "employee_id", None)
+    await audit_log_action(
+        db,
+        "CREATE_HOLIDAY",
+        "HOLIDAY",
+        user_id=admin_id,
+        affected_entity_id=holiday_id,
+        new_values={"date": str(holiday.date), "name": holiday.name},
+        actor_email=admin_email,
+        actor_employee_id=admin_emp_id,
+        actor_full_name=admin_name,
+        summary=f"{admin_name or 'Admin'} created holiday {holiday.name} ({holiday.date})" if admin_name else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
+    admin_email = admin.get("email") if isinstance(admin, dict) else getattr(admin, "email", None)
+    admin_name = admin.get("full_name") if isinstance(admin, dict) else getattr(admin, "full_name", None)
+    admin_emp_id = admin.get("employee_id") if isinstance(admin, dict) else getattr(admin, "employee_id", None)
+    log_user_action(
+        "CREATE_HOLIDAY",
+        user_id=admin_id,
+        email=admin_email,
+        employee_id=admin_emp_id,
+        full_name=admin_name,
+        holiday_id=holiday_id,
+        date=str(holiday.date),
+        name=holiday.name,
+    )
     return str(holiday_id)
 
 @router.delete("/holidays/{holiday_id}")
-async def delete_holiday(holiday_id: str, admin=Depends(verify_admin), db: AsyncSession = Depends(get_db)):
+async def delete_holiday(
+    request: Request,
+    holiday_id: str,
+    admin=Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
     holiday_id_int = to_int_id(holiday_id)
     if not holiday_id_int:
         raise HTTPException(status_code=400, detail="Invalid ID")
@@ -81,14 +158,48 @@ async def delete_holiday(holiday_id: str, admin=Depends(verify_admin), db: Async
     holiday = result.scalar_one_or_none()
     if not holiday:
         raise HTTPException(status_code=404, detail="Holiday not found")
-    
+
+    admin_id = admin.get("id") if isinstance(admin, dict) else getattr(admin, "id", None)
+    admin_email = admin.get("email") if isinstance(admin, dict) else getattr(admin, "email", None)
+    admin_name = admin.get("full_name") if isinstance(admin, dict) else getattr(admin, "full_name", None)
+    admin_emp_id = admin.get("employee_id") if isinstance(admin, dict) else getattr(admin, "employee_id", None)
+    await audit_log_action(
+        db,
+        "DELETE_HOLIDAY",
+        "HOLIDAY",
+        user_id=admin_id,
+        affected_entity_id=holiday.id,
+        old_values={"date": str(holiday.date), "name": holiday.name},
+        actor_email=admin_email,
+        actor_employee_id=admin_emp_id,
+        actor_full_name=admin_name,
+        summary=f"{admin_name or 'Admin'} deleted holiday {holiday.name} ({holiday.date})" if admin_name else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.delete(holiday)
     await db.commit()
-        
+    admin_email = admin.get("email") if isinstance(admin, dict) else getattr(admin, "email", None)
+    admin_name = admin.get("full_name") if isinstance(admin, dict) else getattr(admin, "full_name", None)
+    admin_emp_id = admin.get("employee_id") if isinstance(admin, dict) else getattr(admin, "employee_id", None)
+    log_user_action(
+        "DELETE_HOLIDAY",
+        user_id=admin_id,
+        email=admin_email,
+        employee_id=admin_emp_id,
+        full_name=admin_name,
+        holiday_id=holiday.id,
+        date=str(holiday.date),
+        name=holiday.name,
+    )
     return {"message": "Deleted successfully"}
 
 @router.post("/yearly-reset")
-async def run_yearly_reset(current_user: dict = Depends(verify_admin), db: AsyncSession = Depends(get_db)):
+async def run_yearly_reset(
+    request: Request,
+    current_user: dict = Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Resets leave balances for the new year.
     - Casual/Sick Leave: Lapse and set to 12.0
@@ -137,8 +248,36 @@ async def run_yearly_reset(current_user: dict = Depends(verify_admin), db: Async
             }
         )
         db.add(job_log)
+        admin_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+        admin_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
+        admin_name = current_user.get("full_name") if isinstance(current_user, dict) else getattr(current_user, "full_name", None)
+        admin_emp_id = current_user.get("employee_id") if isinstance(current_user, dict) else getattr(current_user, "employee_id", None)
+        await audit_log_action(
+            db,
+            "YEARLY_RESET",
+            "JOB",
+            user_id=admin_id,
+            new_values={"job_name": job_name, "year": current_year},
+            actor_email=admin_email,
+            actor_employee_id=admin_emp_id,
+            actor_full_name=admin_name,
+            summary=f"{admin_name or 'Admin'} triggered yearly reset for {current_year}",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
         await db.commit()
-        
+        admin_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
+        admin_name = current_user.get("full_name") if isinstance(current_user, dict) else getattr(current_user, "full_name", None)
+        admin_emp_id = current_user.get("employee_id") if isinstance(current_user, dict) else getattr(current_user, "employee_id", None)
+        log_user_action(
+            "YEARLY_RESET",
+            user_id=admin_id,
+            email=admin_email,
+            employee_id=admin_emp_id,
+            full_name=admin_name,
+            job_name=job_name,
+            year=current_year,
+        )
         return {
             "message": "Yearly reset completed successfully.",
             "job_id": job_name

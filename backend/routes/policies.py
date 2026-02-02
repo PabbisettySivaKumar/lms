@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Response
+from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Response, Request
 import shutil
 import os
 from pathlib import Path
@@ -16,6 +16,8 @@ from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
 from backend.utils.id_utils import to_int_id
+from backend.services.audit import log_action as audit_log_action
+from backend.utils.action_log import log_user_action
 
 router = APIRouter(prefix="/policies", tags=["Policies"])
 
@@ -239,13 +241,25 @@ async def get_all_policies(
     return policies
 
 @router.post("", response_model=LeavePolicy)
-async def create_or_update_policy(policy_data: LeavePolicy, current_user: User = Depends(verify_admin), db: AsyncSession = Depends(get_db)):
+async def create_or_update_policy(
+    request: Request,
+    policy_data: LeavePolicy,
+    current_user: User = Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         # Check if policy exists for the year
         result = await db.execute(select(Policy).where(Policy.year == policy_data.year))
         existing = result.scalar_one_or_none()
         
         if existing:
+            # Capture old values before update (for audit)
+            old_values_policy = {
+                "year": existing.year,
+                "casual_leave_quota": existing.casual_leave_quota,
+                "sick_leave_quota": existing.sick_leave_quota,
+                "wfh_quota": existing.wfh_quota,
+            }
             # Update existing policy
             existing.casual_leave_quota = policy_data.casual_leave_quota
             existing.sick_leave_quota = policy_data.sick_leave_quota
@@ -253,8 +267,33 @@ async def create_or_update_policy(policy_data: LeavePolicy, current_user: User =
             existing.is_active = policy_data.is_active
             existing.document_url = policy_data.document_url
             existing.document_name = policy_data.document_name
+            await audit_log_action(
+                db,
+                "UPDATE_POLICY",
+                "POLICY",
+                user_id=current_user.id,
+                affected_entity_id=existing.id,
+                old_values=old_values_policy,
+                new_values={"year": policy_data.year, "casual_leave_quota": policy_data.casual_leave_quota, "sick_leave_quota": policy_data.sick_leave_quota, "wfh_quota": policy_data.wfh_quota},
+                actor_email=current_user.email,
+                actor_employee_id=current_user.employee_id,
+                actor_full_name=current_user.full_name,
+                actor_role=getattr(current_user, "role", None),
+                summary=f"{current_user.full_name} updated policy for year {policy_data.year}",
+                request_method=request.method,
+                request_path=request.url.path,
+            )
             await db.commit()
             await db.refresh(existing)
+            log_user_action(
+                "UPDATE_POLICY",
+                user_id=current_user.id,
+                email=current_user.email,
+                employee_id=current_user.employee_id,
+                full_name=current_user.full_name,
+                role=getattr(current_user, "role", None),
+                year=policy_data.year,
+            )
             updated = existing
         else:
             # Create new policy
@@ -269,8 +308,32 @@ async def create_or_update_policy(policy_data: LeavePolicy, current_user: User =
             )
             db.add(new_policy)
             await db.flush()
+            await audit_log_action(
+                db,
+                "CREATE_POLICY",
+                "POLICY",
+                user_id=current_user.id,
+                affected_entity_id=new_policy.id,
+                new_values={"year": policy_data.year, "casual_leave_quota": policy_data.casual_leave_quota, "sick_leave_quota": policy_data.sick_leave_quota, "wfh_quota": policy_data.wfh_quota},
+                actor_email=current_user.email,
+                actor_employee_id=current_user.employee_id,
+                actor_full_name=current_user.full_name,
+                actor_role=getattr(current_user, "role", None),
+                summary=f"{current_user.full_name} created policy for year {policy_data.year}",
+                request_method=request.method,
+                request_path=request.url.path,
+            )
             await db.commit()
             await db.refresh(new_policy)
+            log_user_action(
+                "CREATE_POLICY",
+                user_id=current_user.id,
+                email=current_user.email,
+                employee_id=current_user.employee_id,
+                full_name=current_user.full_name,
+                role=getattr(current_user, "role", None),
+                year=policy_data.year,
+            )
             updated = new_policy
             
         if not updated:
@@ -493,9 +556,10 @@ async def delete_policy_document(
 
 @router.delete("/{year}")
 async def delete_entire_policy(
-    year: int, 
+    request: Request,
+    year: int,
     current_user: User = Depends(verify_admin),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Find policy to get documents for disk cleanup
     result = await db.execute(select(Policy).where(Policy.year == year))
@@ -504,6 +568,21 @@ async def delete_entire_policy(
         raise HTTPException(status_code=404, detail="Policy not found")
     
     policy_id = policy.id
+    await audit_log_action(
+        db,
+        "DELETE_POLICY",
+        "POLICY",
+        user_id=current_user.id,
+        affected_entity_id=policy.id,
+        old_values={"year": year},
+        actor_email=current_user.email,
+        actor_employee_id=current_user.employee_id,
+        actor_full_name=current_user.full_name,
+        actor_role=getattr(current_user, "role", None),
+        summary=f"{current_user.full_name} deleted policy for year {year}",
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     
     # Clean up files from disk - get documents from policy_documents table
     if policy_id:
@@ -524,14 +603,24 @@ async def delete_entire_policy(
     # Delete policy
     await db.delete(policy)
     await db.commit()
+    log_user_action(
+        "DELETE_POLICY",
+        user_id=current_user.id,
+        email=current_user.email,
+        employee_id=current_user.employee_id,
+        full_name=current_user.full_name,
+        role=getattr(current_user, "role", None),
+        year=year,
+    )
     return {"message": f"Policy for year {year} deleted successfully"}
 
 @router.post("/{year}/acknowledge")
 async def acknowledge_policy(
+    request: Request,
     year: int,
     document_url: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Check if policy exists for that year
     result = await db.execute(select(Policy).where(Policy.year == year))
@@ -564,8 +653,32 @@ async def acknowledge_policy(
             acknowledged_at=datetime.utcnow()
         )
         db.add(new_ack)
-    
+
+    await audit_log_action(
+        db,
+        "ACKNOWLEDGE_POLICY",
+        "POLICY",
+        user_id=current_user.id,
+        affected_entity_id=policy.id,
+        new_values={"year": year, "document_url": document_url},
+        actor_email=current_user.email,
+        actor_employee_id=current_user.employee_id,
+        actor_full_name=current_user.full_name,
+        actor_role=getattr(current_user, "role", None),
+        summary=f"{current_user.full_name} acknowledged policy document for year {year}",
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
+    log_user_action(
+        "ACKNOWLEDGE_POLICY",
+        user_id=current_user.id,
+        email=current_user.email,
+        employee_id=current_user.employee_id,
+        full_name=current_user.full_name,
+        role=getattr(current_user, "role", None),
+        year=year,
+    )
     return {"message": "Document acknowledged successfully"}
 
 @router.get("/{year}/my-acknowledgments")

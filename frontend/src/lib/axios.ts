@@ -15,7 +15,7 @@ api.interceptors.request.use(
         }
         // Debug: Log the full URL being requested
         if (process.env.NODE_ENV === 'development') {
-            console.log('API Request:', config.method?.toUpperCase(), config.baseURL + config.url);
+            console.log('API Request:', config.method?.toUpperCase(), (config.baseURL ?? '') + (config.url ?? ''));
         }
         return config;
     },
@@ -24,44 +24,41 @@ api.interceptors.request.use(
     }
 );
 
+// Safely stringify for logging (handles circular refs and non-JSON values)
+function safeStringify(obj: unknown, space?: number): string {
+    try {
+        const seen = new WeakSet();
+        return JSON.stringify(obj, (_, v) => {
+            if (typeof v === 'object' && v !== null) {
+                if (seen.has(v)) return '[Circular]';
+                seen.add(v);
+            }
+            return v;
+        }, space);
+    } catch {
+        return String(obj);
+    }
+}
+
 // Response Interceptor
 api.interceptors.response.use(
     (response) => response,
     (error) => {
         // Log error details for debugging with better serialization
         if (error.response) {
-            // Safely extract error details
-            const errorDetails: any = {
-                status: error.response.status,
-                statusText: error.response.statusText,
-                data: error.response.data,
-            };
-            
-            // Safely extract headers (may have circular references)
-            try {
-                errorDetails.headers = error.response.headers ? 
-                    Object.fromEntries(
-                        Object.entries(error.response.headers).slice(0, 10) // Limit to first 10 headers
-                    ) : undefined;
-            } catch (e) {
-                errorDetails.headers = 'Unable to serialize headers';
-            }
-            
-            // Extract config details
-            errorDetails.config = {
-                method: error.config?.method?.toUpperCase(),
-                url: error.config?.url,
-                baseURL: error.config?.baseURL,
-                fullURL: error.config?.baseURL + error.config?.url,
-            };
-            
-            // Log the error
-            console.error('Axios error response:', errorDetails);
-            
-            // Also log the raw error for debugging
-            if (process.env.NODE_ENV === 'development') {
-                console.error('Raw error object:', error);
-            }
+            const status = error.response.status;
+            const statusText = error.response.statusText;
+            const data = error.response.data;
+            const method = error.config?.method?.toUpperCase();
+            const url = error.config?.url;
+            const baseURL = error.config?.baseURL;
+            const fullURL = baseURL && url ? baseURL + url : url;
+
+            // Single log line: method, URL, status, and body (no duplicate "Full error.response")
+            console.error(
+                `Axios error: ${method} ${fullURL} → ${status} ${statusText}`,
+                typeof data === 'object' && data !== null ? safeStringify(data) : data
+            );
         } else if (error.request) {
             // Request was made but no response received
             console.error('Axios error - no response received:', {

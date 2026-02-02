@@ -33,6 +33,7 @@ import { Pagination } from '@/components/common/Pagination';
 interface LeaveRequest {
     id: number | string; // Backend returns integer, but we support both
     _id?: string; // Backward compatibility
+    request_type?: 'leave' | 'comp_off'; // Backend: leave = leave_requests.id, comp_off = comp_off_claims.id
     start_date: string;
     end_date: string | null;
     type: string;
@@ -42,7 +43,7 @@ interface LeaveRequest {
 
 export default function MyLeavesPage() {
     const queryClient = useQueryClient();
-    const [leaveToCancel, setLeaveToCancel] = useState<string | null>(null);
+    const [leaveToCancel, setLeaveToCancel] = useState<{ id: string; request_type?: string } | null>(null);
 
     // Pagination state
     const [page, setPage] = useState(1);
@@ -83,35 +84,45 @@ export default function MyLeavesPage() {
             setLeaveToCancel(null);
         },
         onError: (error: any) => {
-            // Better error handling
             let errorMessage = 'Failed to cancel leave';
-            
+
             if (error.response) {
-                // Server responded with error
-                errorMessage = error.response.data?.detail || 
-                              error.response.data?.message || 
-                              error.response.statusText || 
-                              `Server error (${error.response.status})`;
+                const detail = error.response.data?.detail;
+                if (typeof detail === 'string') {
+                    errorMessage = detail;
+                } else if (Array.isArray(detail) && detail.length > 0) {
+                    errorMessage = detail.map((d: { msg?: string }) => d.msg || JSON.stringify(d)).join('; ');
+                } else if (detail && typeof detail === 'object') {
+                    errorMessage = JSON.stringify(detail);
+                } else {
+                    errorMessage =
+                        error.response.data?.message ||
+                        error.response.statusText ||
+                        `Server error (${error.response.status})`;
+                }
             } else if (error.request) {
-                // Request made but no response
                 errorMessage = 'No response from server. Please check if the backend is running.';
             } else {
-                // Error setting up request
                 errorMessage = error.message || 'Request failed';
             }
-            
+
             toast.error(errorMessage);
         },
     });
 
-    const handleCancelClick = (id: string) => {
-        setLeaveToCancel(id);
+    const handleCancelClick = (leave: LeaveRequest) => {
+        setLeaveToCancel({ id: String(leave.id), request_type: leave.request_type });
     };
 
     const handleConfirmCancel = () => {
-        if (leaveToCancel) {
-            cancelMutation.mutate(leaveToCancel);
+        if (!leaveToCancel) return;
+        // Only call cancel API for leave requests (not comp-off claims)
+        if (leaveToCancel.request_type === 'comp_off') {
+            toast.error('Cannot cancel comp-off from this page.');
+            setLeaveToCancel(null);
+            return;
         }
+        cancelMutation.mutate(leaveToCancel.id);
     };
 
     if (isLoading) {
@@ -167,11 +178,12 @@ export default function MyLeavesPage() {
                                         <StatusBadge status={leave.status} />
                                     </TableCell>
                                     <TableCell className="text-right">
-                                        {['PENDING', 'APPROVED'].includes(leave.status) && (
+                                        {['PENDING', 'APPROVED'].includes(leave.status) &&
+                                            (leave.request_type === 'leave' || leave.request_type === undefined) && (
                                             <Button
                                                 variant="destructive"
                                                 size="sm"
-                                                onClick={() => handleCancelClick(String(leave.id))}
+                                                onClick={() => handleCancelClick(leave)}
                                                 disabled={cancelMutation.isPending}
                                             >
                                                 Cancel

@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends, status, Security
+from fastapi import APIRouter, HTTPException, Depends, status, Security, Request
 from pydantic import BaseModel
 from backend.db import get_db, AsyncSessionLocal
+from backend.services.audit import log_action as audit_log_action
+from backend.utils.action_log import log_user_action
 from backend.models import User as UserModel, UserRole as UserRoleModel, Role
 from backend.utils.security import verify_password, create_access_token, get_password_hash, SECRET_KEY, ALGORITHM
 from backend.models.user import UserInDB, UserRole
@@ -137,7 +139,11 @@ async def verify_admin(email: str = Depends(get_current_user_email), db: AsyncSe
     }
 
 @router.post("/login", response_model=LoginResponse)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         # Get user by email
         result = await db.execute(select(UserModel).where(UserModel.email == form_data.username))
@@ -199,7 +205,30 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
             "scopes": granted_scopes  # Add OAuth2 scopes
         }
         access_token = create_access_token(data=token_data)
-        
+
+        await audit_log_action(
+            db,
+            "LOGIN",
+            "USER",
+            user_id=user.id,
+            affected_entity_id=user.id,
+            actor_email=user.email,
+            actor_employee_id=user.employee_id,
+            actor_full_name=user.full_name,
+            actor_role=role_name,
+            summary=f"{user.full_name} ({role_name}) logged in",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
+        log_user_action(
+            "LOGIN",
+            user_id=user.id,
+            email=user.email,
+            employee_id=user.employee_id,
+            full_name=user.full_name,
+            role=role_name,
+        )
+
         return {
             "access_token": access_token,
             "token_type": "bearer",
@@ -217,9 +246,10 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
 
 @router.patch("/first-login-reset")
 async def first_login_reset(
-    reset_data: PasswordResetRequest, 
+    request: Request,
+    reset_data: PasswordResetRequest,
     email: str = Depends(get_current_user_email),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(UserModel).where(UserModel.email == email))
     user = result.scalar_one_or_none()
@@ -232,13 +262,30 @@ async def first_login_reset(
     hashed_password = get_password_hash(reset_data.new_password)
     user.hashed_password = hashed_password
     user.reset_required = False
+    await audit_log_action(
+        db,
+        "FIRST_LOGIN_RESET",
+        "USER",
+        user_id=user.id,
+        affected_entity_id=user.id,
+        actor_email=user.email,
+        actor_employee_id=user.employee_id,
+        actor_full_name=user.full_name,
+        summary=f"{user.full_name} completed first-login password reset",
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
-    
+    log_user_action("FIRST_LOGIN_RESET", user_id=user.id, email=user.email, employee_id=user.employee_id, full_name=user.full_name)
     return {"message": "Password updated successfully"}
 
 @router.post("/forgot-password")
-async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(UserModel).where(UserModel.email == request.email))
+async def forgot_password(
+    request_body: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(UserModel).where(UserModel.email == request_body.email))
     user = result.scalar_one_or_none()
     if not user:
         # Return 200 to prevent email enumeration
@@ -249,6 +296,14 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
     
     user.password_reset_token = token
     user.password_reset_expiry = expiry
+    await audit_log_action(
+        db,
+        "FORGOT_PASSWORD_REQUEST",
+        "USER",
+        user_id=user.id,
+        affected_entity_id=user.id,
+        new_values={"email": request_body.email},
+    )
     await db.commit()
     
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -256,19 +311,23 @@ async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Dep
     
     # Send Email
     await send_email(
-        to_email=request.email,
+        to_email=request_body.email,
         subject="Reset Password",
-        body=f"Target: {request.email}\nYour reset token is: {token}\n\nClick here to reset your password:\n{reset_link}\n\nExpires in 15 minutes."
+        body=f"Target: {request_body.email}\nYour reset token is: {token}\n\nClick here to reset your password:\n{reset_link}\n\nExpires in 15 minutes."
     )
     
     return {"message": "If the email exists, a reset link has been sent."}
 
 @router.post("/reset-password")
-async def reset_password_token(request: TokenResetRequest, db: AsyncSession = Depends(get_db)):
+async def reset_password_token(
+    request_body: TokenResetRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     # Find user with matching token and non-expired expiry
     result = await db.execute(
         select(UserModel).where(
-            UserModel.password_reset_token == request.token,
+            UserModel.password_reset_token == request_body.token,
             UserModel.password_reset_expiry > datetime.utcnow()
         )
     )
@@ -277,20 +336,28 @@ async def reset_password_token(request: TokenResetRequest, db: AsyncSession = De
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
         
-    hashed_password = get_password_hash(request.new_password)
+    hashed_password = get_password_hash(request_body.new_password)
     user.hashed_password = hashed_password
     user.reset_required = False
     user.password_reset_token = None
     user.password_reset_expiry = None
+    await audit_log_action(
+        db,
+        "RESET_PASSWORD_TOKEN",
+        "USER",
+        user_id=user.id,
+        affected_entity_id=user.id,
+    )
     await db.commit()
     
     return {"message": "Password updated successfully."}
 
 @router.post("/change-password")
 async def change_password(
-    request: ChangePasswordRequest,
+    request_body: ChangePasswordRequest,
+    request: Request,
     email: str = Depends(get_current_user_email),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(UserModel).where(UserModel.email == email))
     user = result.scalar_one_or_none()
@@ -298,11 +365,24 @@ async def change_password(
         raise HTTPException(status_code=404, detail="User not found")
         
     # Verify current password
-    if not verify_password(request.current_password, user.hashed_password):
+    if not verify_password(request_body.current_password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect current password")
         
-    hashed_password = get_password_hash(request.new_password)
+    hashed_password = get_password_hash(request_body.new_password)
     user.hashed_password = hashed_password
+    await audit_log_action(
+        db,
+        "CHANGE_PASSWORD",
+        "USER",
+        user_id=user.id,
+        affected_entity_id=user.id,
+        actor_email=user.email,
+        actor_employee_id=user.employee_id,
+        actor_full_name=user.full_name,
+        summary=f"{user.full_name} changed password",
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
-    
+    log_user_action("CHANGE_PASSWORD", user_id=user.id, email=user.email, employee_id=user.employee_id, full_name=user.full_name)
     return {"message": "Password updated successfully"}

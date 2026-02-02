@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
 from datetime import date, timedelta
 from typing import List, Union, Optional
 from backend.utils.id_utils import to_int_id
@@ -19,6 +19,8 @@ from backend.routes.auth import get_current_user_email, verify_admin, create_sco
 from backend.routes.users import user_model_to_pydantic
 from backend.utils.scopes import Scope
 from backend.services.email import send_email
+from backend.services.audit import log_action as audit_log_action
+from backend.utils.action_log import log_user_action
 from backend.utils.leave_utils import (
     calculate_deductible_days_optimized,
     determine_approver,
@@ -46,10 +48,11 @@ async def get_current_user(email: str = Depends(get_current_user_email), db: Asy
 
 @router.post("/apply", response_model=dict)
 async def apply_leave(
-    leave: LeaveRequestCreate, 
+    request: Request,
+    leave: LeaveRequestCreate,
     background_tasks: BackgroundTasks,
     user: UserSchema = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         # 0. Prevent EARNED as a new leave type (use CASUAL instead)
@@ -121,7 +124,40 @@ async def apply_leave(
             db.add(new_leave)
             await db.flush()  # Flush to get the ID
             leave_id = new_leave.id
+            await audit_log_action(
+                db,
+                "CREATE_LEAVE",
+                "LEAVE",
+                user_id=user.id,
+                affected_entity_id=leave_id,
+                new_values={
+                    "type": leave.type.value,
+                    "start_date": str(leave.start_date),
+                    "end_date": str(leave.end_date) if leave.end_date else None,
+                    "deductible_days": deductible_days,
+                    "status": "PENDING",
+                },
+                actor_email=user.email,
+                actor_employee_id=user.employee_id,
+                actor_full_name=user.full_name,
+                actor_role=getattr(user, "role", None),
+                summary=f"{user.full_name} applied for leave ({leave.type.value}, {deductible_days} days)",
+                request_method=request.method,
+                request_path=request.url.path,
+            )
             await db.commit()
+            log_user_action(
+                "APPLIED_LEAVE",
+                user_id=user.id,
+                email=user.email,
+                employee_id=user.employee_id,
+                full_name=user.full_name,
+                role=getattr(user, "role", None),
+                leave_id=leave_id,
+                type=leave.type.value,
+                start_date=str(leave.start_date),
+                deductible_days=deductible_days,
+            )
         except Exception as db_error:
             await db.rollback()
             import traceback
@@ -207,10 +243,11 @@ async def apply_leave(
 
 @router.post("/claim-comp-off", response_model=dict)
 async def claim_comp_off(
-    claim: CompOffClaimCreate, 
+    request: Request,
+    claim: CompOffClaimCreate,
     background_tasks: BackgroundTasks,
     user: UserSchema = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     if claim.work_date > date.today():
         raise HTTPException(status_code=400, detail="Cannot claim comp-off for future dates")
@@ -230,8 +267,32 @@ async def claim_comp_off(
     db.add(new_claim)
     await db.flush()  # Flush to get the ID
     claim_id = new_claim.id
+    await audit_log_action(
+        db,
+        "CREATE_COMP_OFF",
+        "COMP_OFF",
+        user_id=user.id,
+        affected_entity_id=claim_id,
+        new_values={"work_date": str(claim.work_date), "reason": claim.reason, "status": "PENDING"},
+        actor_email=user.email,
+        actor_employee_id=user.employee_id,
+        actor_full_name=user.full_name,
+        actor_role=getattr(user, "role", None),
+        summary=f"{user.full_name} claimed comp-off for {claim.work_date}",
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
-    
+    log_user_action(
+        "CLAIMED_COMP_OFF",
+        user_id=user.id,
+        email=user.email,
+        employee_id=user.employee_id,
+        full_name=user.full_name,
+        role=getattr(user, "role", None),
+        comp_off_id=claim_id,
+        work_date=str(claim.work_date),
+    )
     # NOTIFICATION - using background task for non-blocking email
     if approver_email:
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -269,13 +330,14 @@ async def claim_comp_off(
 
 @router.patch("/action/{item_id}")
 async def action_leave(
+    request: Request,
     item_id: str,
     action: str,  # APPROVE or REJECT
     note: Optional[str] = None,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     # Use scope-based auth for approve:leaves scope
     email: str = Depends(create_scope_dependency([Scope.APPROVE_LEAVES])),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     if action not in ["APPROVE", "REJECT"]:
         raise HTTPException(status_code=400, detail="Invalid action")
@@ -392,8 +454,34 @@ async def action_leave(
         elif new_status_enum == LeaveStatusEnum.REJECTED:
             from datetime import datetime
             item.rejected_at = datetime.utcnow()
+        await audit_log_action(
+            db,
+            "APPROVE_LEAVE" if action == "APPROVE" else "REJECT_LEAVE",
+            "LEAVE",
+            user_id=approver.id,
+            affected_entity_id=item.id,
+            old_values={"status": current_status},
+            new_values={"status": new_status_enum.value, "note": note},
+            actor_email=approver.email,
+            actor_employee_id=approver.employee_id,
+            actor_full_name=approver.full_name,
+            actor_role=getattr(approver, "role", None),
+            summary=f"{approver.full_name} {action.lower()}ed leave request #{item.id}",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
         await db.commit()
-        
+        log_user_action(
+            "APPROVED_LEAVE" if action == "APPROVE" else "REJECTED_LEAVE",
+            user_id=approver.id,
+            email=approver.email,
+            employee_id=approver.employee_id,
+            full_name=approver.full_name,
+            role=getattr(approver, "role", None),
+            leave_id=item.id,
+            applicant_id=applicant_id,
+            new_status=new_status_enum.value,
+        )
     else: # comp_off
         new_status_enum = CompOffStatusEnum.APPROVED if action == "APPROVE" else CompOffStatusEnum.REJECTED
         applicant_id = item.claimant_id
@@ -425,7 +513,35 @@ async def action_leave(
         if new_status_enum == CompOffStatusEnum.APPROVED:
             from datetime import datetime
             item.approved_at = datetime.utcnow()
+        current_status_comp = item.status.value if hasattr(item.status, "value") else str(item.status)
+        await audit_log_action(
+            db,
+            "APPROVE_COMP_OFF" if action == "APPROVE" else "REJECT_COMP_OFF",
+            "COMP_OFF",
+            user_id=approver.id,
+            affected_entity_id=item.id,
+            old_values={"status": current_status_comp},
+            new_values={"status": new_status_enum.value, "note": note},
+            actor_email=approver.email,
+            actor_employee_id=approver.employee_id,
+            actor_full_name=approver.full_name,
+            actor_role=getattr(approver, "role", None),
+            summary=f"{approver.full_name} {action.lower()}ed comp-off claim #{item.id}",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
         await db.commit()
+        log_user_action(
+            "APPROVED_COMP_OFF" if action == "APPROVE" else "REJECTED_COMP_OFF",
+            user_id=approver.id,
+            email=approver.email,
+            employee_id=approver.employee_id,
+            full_name=approver.full_name,
+            role=getattr(approver, "role", None),
+            comp_off_id=item.id,
+            claimant_id=applicant_id,
+            new_status=new_status_enum.value,
+        )
 
     # NOTIFICATION
     applicant_result = await db.execute(select(UserModel).where(UserModel.id == applicant_id))
@@ -475,7 +591,12 @@ async def action_leave(
     return {"message": f"Request {new_status_str}"}
 
 @router.post("/{leave_id}/cancel")
-async def cancel_leave(leave_id: str, user: UserSchema = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def cancel_leave(
+    request: Request,
+    leave_id: str,
+    user: UserSchema = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     # Convert leave_id to integer
     leave_id_int = to_int_id(leave_id)
     if not leave_id_int:
@@ -504,7 +625,33 @@ async def cancel_leave(leave_id: str, user: UserSchema = Depends(get_current_use
         # Just update status to CANCELLED or delete? User asked to "Delete or mark as Withdrawn".
         # Let's mark as CANCELLED to keep history.
         leave.status = LeaveStatusEnum.CANCELLED
+        await audit_log_action(
+            db,
+            "CANCEL_LEAVE",
+            "LEAVE",
+            user_id=user.id,
+            affected_entity_id=leave.id,
+            old_values={"status": current_status},
+            new_values={"status": "CANCELLED"},
+            actor_email=user.email,
+            actor_employee_id=user.employee_id,
+            actor_full_name=user.full_name,
+            actor_role=getattr(user, "role", None),
+            summary=f"{user.full_name} withdrew leave request #{leave.id} (was {current_status})",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
         await db.commit()
+        log_user_action(
+            "CANCELLED_LEAVE",
+            user_id=user.id,
+            email=user.email,
+            employee_id=user.employee_id,
+            full_name=user.full_name,
+            role=getattr(user, "role", None),
+            leave_id=leave.id,
+            previous_status=current_status,
+        )
         return {"message": "Leave withdrawn successfully."}
         
     # Case B: Approved -> Immediate Cancel + Refund
@@ -521,8 +668,34 @@ async def cancel_leave(leave_id: str, user: UserSchema = Depends(get_current_use
 
         # Update Status
         leave.status = LeaveStatusEnum.CANCELLED
+        await audit_log_action(
+            db,
+            "CANCEL_LEAVE",
+            "LEAVE",
+            user_id=user.id,
+            affected_entity_id=leave.id,
+            old_values={"status": current_status, "type": leave.type.value if hasattr(leave.type, "value") else str(leave.type), "deductible_days": deductible},
+            new_values={"status": "CANCELLED", "refunded_days": deductible},
+            actor_email=user.email,
+            actor_employee_id=user.employee_id,
+            actor_full_name=user.full_name,
+            actor_role=getattr(user, "role", None),
+            summary=f"{user.full_name} cancelled approved leave #{leave.id} (refunded {deductible} days)",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
         await db.commit()
-        
+        log_user_action(
+            "CANCELLED_LEAVE",
+            user_id=user.id,
+            email=user.email,
+            employee_id=user.employee_id,
+            full_name=user.full_name,
+            role=getattr(user, "role", None),
+            leave_id=leave.id,
+            previous_status=current_status,
+            refunded_days=deductible,
+        )
         return {"message": "Leave cancelled and balance refunded."}
         
     # Case C: Rejected or already Cancelled
@@ -642,6 +815,7 @@ async def get_my_leaves(
     for doc in leaves_models:
         leaves.append({
             "id": str(doc.id),
+            "request_type": "leave",  # So frontend can call /leaves/:id/cancel only for leaves
             "start_date": str(doc.start_date),
             "end_date": str(doc.end_date) if doc.end_date else None,
             "type": doc.type.value if hasattr(doc.type, 'value') else str(doc.type),
@@ -661,11 +835,12 @@ async def get_my_leaves(
     for doc in comp_off_models:
         leaves.append({
             "id": str(doc.id),
+            "request_type": "comp_off",  # Different table - do not use for /leaves/:id/cancel
             "start_date": str(doc.work_date),
-            "end_date": str(doc.work_date), # Same day
+            "end_date": str(doc.work_date),  # Same day
             "type": "COMP_OFF",
             "status": doc.status.value.upper() if hasattr(doc.status, 'value') else str(doc.status).upper(),
-            "deductible_days": 1.0 # Earning 1 day, effectively
+            "deductible_days": 1.0  # Earning 1 day, effectively
         })
 
     return {

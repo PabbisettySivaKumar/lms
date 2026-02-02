@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, status, Security
+from fastapi import APIRouter, HTTPException, Depends, status, Security, Request
 from typing import List, Optional
 from datetime import datetime
 from backend.db import get_db, AsyncSessionLocal
@@ -8,6 +8,8 @@ from backend.utils.security import get_password_hash
 from backend.routes.auth import get_current_user_email, verify_admin, create_scope_dependency
 from backend.utils.scopes import Scope
 from backend.utils.id_utils import to_int_id
+from backend.services.audit import log_action as audit_log_action
+from backend.utils.action_log import log_user_action
 from fastapi import UploadFile, File
 from sqlalchemy import select, func, and_, or_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
@@ -143,9 +145,10 @@ from backend.models.user import UserUpdateProfile
 
 @router.patch("/users/me", response_model=UserSchema)
 async def update_user_me(
+    request: Request,
     profile_data: UserUpdateProfile,
     current_user: UserSchema = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         result = await db.execute(select(UserModel).where(UserModel.id == current_user.id))
@@ -163,14 +166,45 @@ async def update_user_me(
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
         
+        # Capture old values before update (for audit)
+        old_values = {}
+        for key in update_data.keys():
+            if hasattr(user, key):
+                val = getattr(user, key)
+                old_values[key] = val.isoformat() if hasattr(val, "isoformat") else val
+
         # Update user fields
         for key, value in update_data.items():
             if hasattr(user, key):
                 setattr(user, key, value)
-        
+
+        await audit_log_action(
+            db,
+            "UPDATE_PROFILE",
+            "USER",
+            user_id=current_user.id,
+            affected_entity_id=user.id,
+            old_values=old_values,
+            new_values=update_data,
+            actor_email=current_user.email,
+            actor_employee_id=current_user.employee_id,
+            actor_full_name=current_user.full_name,
+            actor_role=getattr(current_user, "role", None),
+            summary=f"{current_user.full_name} updated profile ({', '.join(update_data.keys())})",
+            request_method=request.method,
+            request_path=request.url.path,
+        )
         await db.commit()
         await db.refresh(user)
-        
+        log_user_action(
+            "UPDATE_PROFILE",
+            user_id=current_user.id,
+            email=current_user.email,
+            employee_id=current_user.employee_id,
+            full_name=current_user.full_name,
+            role=getattr(current_user, "role", None),
+            updated_fields=list(update_data.keys()),
+        )
         return await user_model_to_pydantic(user, db)
     except HTTPException:
         raise
@@ -229,10 +263,11 @@ async def upload_profile_picture(
 
 @router.post("/admin/users", response_model=UserSchema)
 async def create_user_admin(
+    request: Request,
     user_in: UserCreateAdmin,
     # Use scope-based auth (can also use verify_admin for backward compatibility)
     email: str = Depends(create_scope_dependency([Scope.ADMIN_USERS])),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Check if email exists
     result = await db.execute(select(UserModel).where(UserModel.email == user_in.email))
@@ -354,10 +389,36 @@ async def create_user_admin(
         UserLeaveBalance(user_id=user_id, leave_type=LeaveTypeEnum.COMP_OFF, balance=0.0),
     ]
     db.add_all(balances)
-    
+
+    admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
+    admin_user = admin_result.scalar_one_or_none()
+    await audit_log_action(
+        db,
+        "CREATE_USER",
+        "USER",
+        user_id=admin_user.id if admin_user else None,
+        affected_entity_id=new_user.id,
+        new_values={"email": new_user.email, "employee_id": new_user.employee_id, "full_name": new_user.full_name},
+        actor_email=admin_user.email if admin_user else None,
+        actor_employee_id=admin_user.employee_id if admin_user else None,
+        actor_full_name=admin_user.full_name if admin_user else None,
+        summary=f"{admin_user.full_name if admin_user else 'Admin'} created user {new_user.full_name} ({new_user.employee_id})" if admin_user else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
     await db.refresh(new_user)
-    
+    if admin_user:
+        log_user_action(
+            "CREATE_USER",
+            user_id=admin_user.id,
+            email=admin_user.email,
+            employee_id=admin_user.employee_id,
+            full_name=admin_user.full_name,
+            created_user_id=new_user.id,
+            created_email=new_user.email,
+            created_employee_id=new_user.employee_id,
+        )
     return await user_model_to_pydantic(new_user, db)
 
 @router.get("/admin/managers", response_model=List[dict])
@@ -441,10 +502,11 @@ async def list_users(
 
 @router.patch("/admin/users/{user_id}/balance", response_model=UserSchema)
 async def update_user_balance(
+    request: Request,
     user_id: str,
     balance_data: UserBalanceUpdate,
     email: str = Depends(create_scope_dependency([Scope.ADMIN_USERS])),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Convert user_id to integer
     user_id_int = to_int_id(user_id)
@@ -473,7 +535,20 @@ async def update_user_balance(
         "earned_balance": LeaveTypeEnum.EARNED,
         "wfh_balance": LeaveTypeEnum.WFH,
     }
-    
+
+    # Capture old balances before update (for audit)
+    old_values = {}
+    for field_name in update_data.keys():
+        if field_name in leave_type_map:
+            leave_type = leave_type_map[field_name]
+            balance_result = await db.execute(
+                select(UserLeaveBalance).where(
+                    and_(UserLeaveBalance.user_id == user_id_int, UserLeaveBalance.leave_type == leave_type)
+                )
+            )
+            bal = balance_result.scalar_one_or_none()
+            old_values[field_name] = float(bal.balance) if bal else 0.0
+
     # Update balances in user_leave_balances table
     for field_name, balance_value in update_data.items():
         if field_name in leave_type_map:
@@ -496,10 +571,36 @@ async def update_user_balance(
                     balance=float(balance_value)
                 )
                 db.add(new_balance)
-    
+
+    admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
+    admin_user = admin_result.scalar_one_or_none()
+    await audit_log_action(
+        db,
+        "UPDATE_BALANCE",
+        "BALANCE",
+        user_id=admin_user.id if admin_user else None,
+        affected_entity_id=user_id_int,
+        old_values=old_values,
+        new_values=update_data,
+        actor_email=admin_user.email if admin_user else None,
+        actor_employee_id=admin_user.employee_id if admin_user else None,
+        actor_full_name=admin_user.full_name if admin_user else None,
+        summary=f"{admin_user.full_name if admin_user else 'Admin'} updated balance for user_id={user_id_int}" if admin_user else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
     await db.refresh(user)
-    
+    if admin_user:
+        log_user_action(
+            "UPDATE_BALANCE",
+            user_id=admin_user.id,
+            email=admin_user.email,
+            employee_id=admin_user.employee_id,
+            full_name=admin_user.full_name,
+            target_user_id=user_id_int,
+            balances=update_data,
+        )
     return await user_model_to_pydantic(user, db)
 
 @router.post("/users/me/documents", response_model=UserSchema)
@@ -619,9 +720,10 @@ async def trigger_accrual(
 
 @router.delete("/admin/users/{user_id}")
 async def delete_user(
+    request: Request,
     user_id: str,
     email: str = Depends(create_scope_dependency([Scope.ADMIN_USERS])),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Convert user_id to integer
     user_id_int = to_int_id(user_id)
@@ -632,20 +734,48 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
+    old_values = {"email": user.email, "employee_id": user.employee_id, "full_name": user.full_name}
+    admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
+    admin_user = admin_result.scalar_one_or_none()
+    await audit_log_action(
+        db,
+        "DELETE_USER",
+        "USER",
+        user_id=admin_user.id if admin_user else None,
+        affected_entity_id=user.id,
+        old_values=old_values,
+        actor_email=admin_user.email if admin_user else None,
+        actor_employee_id=admin_user.employee_id if admin_user else None,
+        actor_full_name=admin_user.full_name if admin_user else None,
+        summary=f"{admin_user.full_name if admin_user else 'Admin'} deleted user {user.full_name} ({user.employee_id})" if admin_user else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.delete(user)
     await db.commit()
-        
+    if admin_user:
+        log_user_action(
+            "DELETE_USER",
+            user_id=admin_user.id,
+            email=admin_user.email,
+            employee_id=admin_user.employee_id,
+            full_name=admin_user.full_name,
+            deleted_user_id=user.id,
+            deleted_email=user.email,
+            deleted_employee_id=user.employee_id,
+        )
     return {"message": "User deleted successfully"}
 
 from backend.models.user import UserUpdateAdmin
 
 @router.patch("/admin/users/{user_id}", response_model=UserSchema)
 async def update_user_details(
+    request: Request,
     user_id: str,
     user_data: UserUpdateAdmin,
     email: str = Depends(create_scope_dependency([Scope.ADMIN_USERS])),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Convert user_id to integer
     user_id_clean = user_id.strip() if isinstance(user_id, str) else str(user_id)
@@ -787,14 +917,47 @@ async def update_user_details(
     if not update_dict:
         return await user_model_to_pydantic(existing_user, db)
 
+    # Capture old values before update (for audit)
+    old_values_user = {k: getattr(existing_user, k) for k in update_dict.keys() if hasattr(existing_user, k)}
+    for k, v in list(old_values_user.items()):
+        if hasattr(v, "isoformat"):
+            old_values_user[k] = v.isoformat()
+
     # Update user fields
     for key, value in update_dict.items():
         if hasattr(existing_user, key):
             setattr(existing_user, key, value)
-    
+
+    admin_result = await db.execute(select(UserModel).where(UserModel.email == email))
+    admin_user = admin_result.scalar_one_or_none()
+    await audit_log_action(
+        db,
+        "UPDATE_USER",
+        "USER",
+        user_id=admin_user.id if admin_user else None,
+        affected_entity_id=existing_user.id,
+        old_values=old_values_user,
+        new_values=update_dict,
+        actor_email=admin_user.email if admin_user else None,
+        actor_employee_id=admin_user.employee_id if admin_user else None,
+        actor_full_name=admin_user.full_name if admin_user else None,
+        summary=f"{admin_user.full_name if admin_user else 'Admin'} updated user {existing_user.full_name} ({', '.join(update_dict.keys())})" if admin_user else None,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
     await db.commit()
     await db.refresh(existing_user)
-    
+    if admin_user:
+        log_user_action(
+            "UPDATE_USER",
+            user_id=admin_user.id,
+            email=admin_user.email,
+            employee_id=admin_user.employee_id,
+            full_name=admin_user.full_name,
+            target_user_id=existing_user.id,
+            target_email=existing_user.email,
+            updated_fields=list(update_dict.keys()),
+        )
     return await user_model_to_pydantic(existing_user, db)
 
 @router.get("/admin/integrity-check")

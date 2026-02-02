@@ -92,10 +92,6 @@ async def close_db():
     logger.info("Database connections closed")
 
 
-# ============================================================================
-# Legacy aiomysql Support (For Backward Compatibility)
-# ============================================================================
-# These functions are kept for existing code that hasn't migrated to SQLAlchemy yet
 
 # Legacy connection pool
 _pool: Optional[aiomysql.Pool] = None
