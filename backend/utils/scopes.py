@@ -69,6 +69,7 @@ ROLE_SCOPES = {
         Scope.WRITE_POLICIES,
         Scope.ACKNOWLEDGE_POLICIES,
         Scope.EXPORT_DATA,  # HR can export leave reports
+        Scope.TRIGGER_JOBS,  # HR can trigger monthly accrual
     ],
     UserRole.ADMIN: [
         Scope.READ_LEAVES,

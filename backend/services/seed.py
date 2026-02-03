@@ -2,6 +2,7 @@
 Shared seed logic for roles and admin user.
 Used by the POST /admin/bootstrap API endpoint.
 """
+import os
 from datetime import date
 from typing import Tuple
 
@@ -22,11 +23,11 @@ from backend.utils.scopes import ROLE_SCOPES
 from backend.utils.security import get_password_hash
 
 
-# Default admin credentials
-ADMIN_EMAIL = "admin@dotkonnekt.com"
-ADMIN_PASSWORD = "Admin@123"
-ADMIN_EMPLOYEE_ID = "ADMIN001"
-ADMIN_FULL_NAME = "Super Admin"
+# Admin credentials (from .env, with fallbacks)
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@dotkonnekt.com")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Admin@123")
+ADMIN_EMPLOYEE_ID = os.getenv("ADMIN_EMPLOYEE_ID", "ADMIN001")
+ADMIN_FULL_NAME = os.getenv("ADMIN_FULL_NAME", "Super Admin")
 
 
 async def run_seed_roles(db: AsyncSession) -> Tuple[int, int]:

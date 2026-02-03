@@ -2,9 +2,9 @@ from fastapi import APIRouter, HTTPException, Depends, status, Security, Request
 from typing import List, Optional
 from datetime import datetime
 from backend.db import get_db, AsyncSessionLocal, ensure_database_exists, init_db
-from backend.models import User as UserModel, UserRole as UserRoleModel, Role, UserLeaveBalance, UserDocument, Policy, LeaveTypeEnum, UserSchema, StaffRole
+from backend.models import User as UserModel, UserRole as UserRoleModel, Role, UserLeaveBalance, UserDocument, Policy, LeaveTypeEnum, UserSchema, StaffRole, JobLog
+from backend.models.enums import BalanceChangeTypeEnum, JobStatusEnum
 from backend.models.user import UserCreateAdmin, UserRole
-from backend.models.enums import BalanceChangeTypeEnum
 from backend.services.balance_history import record_balance_change
 from backend.utils.security import get_password_hash
 from backend.routes.auth import get_current_user_email, get_optional_user_email, verify_admin, create_scope_dependency
@@ -24,6 +24,7 @@ import json
 from sqlalchemy import desc  # type: ignore
 from backend.utils.id_utils import to_int_id
 from backend.models.user import UserBalanceUpdate
+from backend.services.scheduler import monthly_accrual
 
 router = APIRouter(prefix="", tags=["Users"])
 
@@ -783,18 +784,72 @@ async def delete_document(
     
     return await user_model_to_pydantic(updated_user, db)
 
-from backend.services.scheduler import monthly_accrual
+
+
+def _monthly_accrual_job_name(year: int, month: int) -> str:
+    return f"monthly_accrual_{year}_{month:02d}"
+
+
+@router.get("/admin/job-status")
+async def get_job_status(
+    email: str = Depends(create_scope_dependency([Scope.TRIGGER_JOBS])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns whether monthly accrual and yearly reset have already run for the current period.
+    Used by the frontend to disable manual trigger buttons when not needed.
+    """
+    now = datetime.utcnow()
+    year, month = now.year, now.month
+    monthly_job_name = _monthly_accrual_job_name(year, month)
+    yearly_scheduler_name = f"yearly_reset_{year}"
+    yearly_manual_prefix = f"manual_yearly_reset_{year}_"
+
+    monthly_done = await db.execute(
+        select(JobLog).where(
+            and_(JobLog.job_name == monthly_job_name, JobLog.status == JobStatusEnum.SUCCESS)
+        )
+    )
+    yearly_scheduler = await db.execute(
+        select(JobLog).where(
+            and_(JobLog.job_name == yearly_scheduler_name, JobLog.status == JobStatusEnum.SUCCESS)
+        )
+    )
+    yearly_manual = await db.execute(
+        select(JobLog).where(
+            JobLog.job_name.like(f"{yearly_manual_prefix}%"),
+            JobLog.status == JobStatusEnum.SUCCESS,
+        ).limit(1)
+    )
+    return {
+        "monthly_accrual_run_this_month": monthly_done.scalar_one_or_none() is not None,
+        "yearly_reset_run_this_year": yearly_scheduler.scalar_one_or_none() is not None or yearly_manual.scalar_one_or_none() is not None,
+    }
+
 
 @router.post("/admin/trigger-accrual")
 async def trigger_accrual(
-    email: str = Depends(create_scope_dependency([Scope.TRIGGER_JOBS]))
+    email: str = Depends(create_scope_dependency([Scope.TRIGGER_JOBS])),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Manually trigger the monthly accrual process (for testing).
+    Manually trigger the monthly accrual process. Locked out if already run this month.
     """
+    now = datetime.utcnow()
+    job_name = _monthly_accrual_job_name(now.year, now.month)
+    existing = await db.execute(
+        select(JobLog).where(
+            and_(JobLog.job_name == job_name, JobLog.status == JobStatusEnum.SUCCESS)
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Monthly accrual has already run for this month. Use only when the automatic run (1st of month) did not happen.",
+        )
     result = await monthly_accrual()
     if result is not None:
-        pass  # Function completed successfully
+        pass
     return {"message": "Monthly accrual triggered successfully"}
 
 @router.delete("/admin/users/{user_id}")
@@ -1088,9 +1143,6 @@ async def update_user_details(
     return await user_model_to_pydantic(user_for_response or existing_user, db)
 
 
-STAFF_ROLE_NAMES = ("founder", "co_founder", "hr", "manager", "admin")
-
-
 async def _bootstrap_auth_optional(
     email: Optional[str] = Depends(get_optional_user_email),
     db: AsyncSession = Depends(get_db),
@@ -1144,50 +1196,6 @@ async def bootstrap(_auth=Depends(_bootstrap_auth_optional)):
         "admin_email": ADMIN_EMAIL if admin_created else None,
         "admin_employee_id": ADMIN_EMPLOYEE_ID if admin_created else None,
     }
-
-
-@router.post("/admin/backfill-staff-roles", response_model=dict)
-async def backfill_staff_roles(
-    admin=Depends(verify_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    One-time backfill: copy staff roles from user_roles into staff_roles
-    for users who have founder, hr, manager, or admin role.
-    Safe to run multiple times (idempotent).
-    """
-    role_result = await db.execute(
-        select(Role.id, Role.name).where(Role.name.in_(STAFF_ROLE_NAMES))
-    )
-    role_ids_by_name = {name: rid for rid, name in role_result.all()}
-    if not role_ids_by_name:
-        return {"message": "No staff roles (founder/hr/manager/admin) in roles table", "inserted": 0}
-    user_roles_result = await db.execute(
-        select(UserRoleModel.user_id, Role.name)
-        .join(Role, UserRoleModel.role_id == Role.id)
-        .where(
-            and_(
-                UserRoleModel.role_id.in_(role_ids_by_name.values()),
-                UserRoleModel.is_active == True,
-            )
-        )
-    )
-    pairs = [(row.user_id, row.name) for row in user_roles_result.all()]
-    inserted = 0
-    for user_id, role_name in pairs:
-        existing = await db.execute(
-            select(StaffRole).where(
-                and_(StaffRole.user_id == user_id, StaffRole.role_type == role_name)
-            )
-        )
-        if existing.scalar_one_or_none() is None:
-            db.add(StaffRole(user_id=user_id, role_type=role_name, is_active=True))
-            inserted += 1
-        else:
-            # Ensure is_active
-            existing.scalar_one_or_none().is_active = True
-    await db.commit()
-    return {"message": f"Backfill complete. Inserted {inserted} staff_role rows.", "inserted": inserted}
 
 
 @router.get("/admin/integrity-check")

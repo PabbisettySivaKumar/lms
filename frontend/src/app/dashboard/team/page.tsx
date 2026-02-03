@@ -41,6 +41,19 @@ interface LeaveRequest {
   reason: string;
 }
 
+interface TeamMember {
+  id: number | string;
+  employee_id: string;
+  full_name: string;
+  email: string;
+  role?: string;
+  casual_balance?: number;
+  sick_balance?: number;
+  earned_balance?: number;
+  comp_off_balance?: number;
+  wfh_balance?: number;
+}
+
 interface TeamPresenceMember {
   id: number;
   employee_id: string;
@@ -69,35 +82,48 @@ export default function TeamPage() {
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [presenceDate, setPresenceDate] = useState(todayStr);
 
-  // Access Control
-  useEffect(() => {
-    if (!isLoading && user) {
-      const allowed = ['manager', 'hr', 'founder', 'admin'];
-      if (!allowed.includes(user.role)) {
-        router.push('/dashboard');
-      }
-    }
-  }, [user, isLoading, router]);
+  // Manager+ can see pending requests, full team, and presence. Employees see only teammates (peers under same manager).
+  const canSeeTeam = !!user && ['manager', 'hr', 'founder', 'co_founder', 'admin'].includes(user.role ?? '');
+  const isEmployeeRole = !!user && ['employee', 'intern', 'contract'].includes(user.role ?? '');
 
-  // Fetch Data
+  // Fetch Data — pending leaves (for manager+ only; employees get empty list from API)
   const { data, isLoading: isDataLoading } = useQuery({
     queryKey: ['pending-leaves'],
     queryFn: async () => {
       const res = await api.get<{ leaves: LeaveRequest[]; comp_offs: LeaveRequest[] }>('/leaves/pending');
-      // Normalize: Combine both lists
       return [...res.data.leaves, ...res.data.comp_offs];
     },
-    enabled: !!user,
+    enabled: !!user && canSeeTeam,
   });
 
-  // Team presence for selected date
+  // Team roster (GET /manager/team) — manager+ only
+  const { data: teamRoster, isLoading: isTeamRosterLoading } = useQuery({
+    queryKey: ['manager-team'],
+    queryFn: async () => {
+      const res = await api.get<TeamMember[]>('/manager/team');
+      return res.data;
+    },
+    enabled: canSeeTeam,
+  });
+
+  // Teammates (GET /manager/team/peers) — employees: others under the same manager
+  const { data: teamPeers, isLoading: isTeamPeersLoading } = useQuery({
+    queryKey: ['manager-team-peers'],
+    queryFn: async () => {
+      const res = await api.get<TeamMember[]>('/manager/team/peers');
+      return res.data;
+    },
+    enabled: isEmployeeRole,
+  });
+
+  // Team presence for selected date — manager+ only
   const { data: presenceData, isLoading: isPresenceLoading } = useQuery({
     queryKey: ['manager-team-presence', presenceDate],
     queryFn: async () => {
       const res = await api.get<TeamPresenceMember[]>(`/manager/team/presence?date=${presenceDate}`);
       return res.data;
     },
-    enabled: !!user && !!presenceDate,
+    enabled: canSeeTeam && !!presenceDate,
   });
 
   // Actions
@@ -137,18 +163,25 @@ export default function TeamPage() {
     }
   };
 
-  if (isLoading || isDataLoading) {
-    return <div className="p-8">Loading team properties...</div>;
+  if (isLoading) {
+    return <div className="p-8">Loading…</div>;
+  }
+  if (canSeeTeam && isDataLoading) {
+    return <div className="p-8">Loading team…</div>;
   }
 
-  const showPresence = user && ['manager', 'hr', 'founder', 'admin'].includes(user.role);
+  const showPresence = canSeeTeam;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Team Approvals</h1>
+        <h1 className="text-3xl font-bold tracking-tight">
+          {canSeeTeam ? 'Team Approvals' : 'My Teammates'}
+        </h1>
       </div>
 
+      {/* Pending leave/comp-off requests — manager+ only */}
+      {canSeeTeam && (
       <Card>
         <CardHeader>
           <CardTitle>Pending Requests</CardTitle>
@@ -221,6 +254,109 @@ export default function TeamPage() {
           </Table>
         </CardContent>
       </Card>
+      )}
+
+      {/* My Teammates (GET /manager/team/peers) — employees: others under the same manager */}
+      {isEmployeeRole && (
+        <Card>
+          <CardHeader>
+            <CardTitle>My Teammates</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Colleagues who report to the same manager as you.
+            </p>
+          </CardHeader>
+          <CardContent>
+            {isTeamPeersLoading ? (
+              <div className="flex justify-center py-8 text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Employee ID</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Role</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {!teamPeers?.length ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                        No teammates found. You may have no manager assigned, or you are the only one under your manager.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    teamPeers.map((member) => (
+                      <TableRow key={member.id}>
+                        <TableCell className="font-medium">{member.full_name}</TableCell>
+                        <TableCell>{member.employee_id}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={member.email}>{member.email}</TableCell>
+                        <TableCell className="capitalize">{member.role ?? '—'}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* My Team roster (GET /manager/team) */}
+      {showPresence && (
+        <Card>
+          <CardHeader>
+            <CardTitle>My Team</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              {user?.role === 'manager' ? 'Your direct reports.' : 'All active users (HR/Admin/Founder/Co-founder view).'}
+            </p>
+          </CardHeader>
+          <CardContent>
+            {isTeamRosterLoading ? (
+              <div className="flex justify-center py-8 text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Employee ID</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead className="text-right">CL</TableHead>
+                    <TableHead className="text-right">SL</TableHead>
+                    <TableHead className="text-right">EL</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {!teamRoster?.length ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                        No team members. {user?.role === 'manager' ? 'Assign direct reports in Admin → Users.' : ''}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    teamRoster.map((member) => (
+                      <TableRow key={member.id}>
+                        <TableCell className="font-medium">{member.full_name}</TableCell>
+                        <TableCell>{member.employee_id}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={member.email}>{member.email}</TableCell>
+                        <TableCell className="capitalize">{member.role ?? '—'}</TableCell>
+                        <TableCell className="text-right">{member.casual_balance ?? 0}</TableCell>
+                        <TableCell className="text-right">{member.sick_balance ?? 0}</TableCell>
+                        <TableCell className="text-right">{member.earned_balance ?? 0}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Team presence: who is present / on leave on a given day */}
       {showPresence && (

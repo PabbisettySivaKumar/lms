@@ -1,6 +1,6 @@
 """
-Manager view routes: my team and team presence (who is present on a given day).
-Only users with manager/hr/founder/admin role can access.
+Manager view routes: my team, team presence, and teammates (peers under same manager).
+Manager/hr/founder/admin: team and presence. Any authenticated user: team/peers.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from datetime import date
@@ -11,7 +11,7 @@ from backend.models import User as UserModel, UserRole as UserRoleModel, Role, L
 from backend.models.enums import LeaveStatusEnum
 from backend.models.user import UserRole
 from backend.routes.auth import get_current_user_email
-from backend.routes.users import user_model_to_pydantic
+from backend.routes.users import get_current_user, user_model_to_pydantic
 from sqlalchemy import select, and_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
 from sqlalchemy.orm import selectinload  # type: ignore
@@ -76,6 +76,48 @@ async def get_my_team(
     reports = result.scalars().all()
     out = []
     for u in reports:
+        out.append(await user_model_to_pydantic(u, db))
+    return [u.model_dump() for u in out]
+
+
+@router.get("/team/peers", response_model=List[dict])
+async def get_team_peers(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List teammates: users who report to the same manager as the current user (excluding self).
+    Available to any authenticated user. If the user has no manager, returns an empty list.
+    """
+    manager_id = getattr(current_user, "manager_id", None)
+    if manager_id is None:
+        return []
+    user_id = getattr(current_user, "id", None)
+    if user_id is None:
+        return []
+    # Support both int and string id from schema
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return []
+    try:
+        mid = int(manager_id)
+    except (TypeError, ValueError):
+        return []
+    q = (
+        select(UserModel)
+        .where(
+            UserModel.manager_id == mid,
+            UserModel.id != uid,
+            UserModel.is_active == True,
+        )
+        .order_by(UserModel.full_name)
+        .options(selectinload(UserModel.profile))
+    )
+    result = await db.execute(q)
+    peers = result.scalars().all()
+    out = []
+    for u in peers:
         out.append(await user_model_to_pydantic(u, db))
     return [u.model_dump() for u in out]
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Response, Request
+from fastapi import APIRouter, HTTPException, Depends, Response, Request, status
 from typing import List
 from backend.db import get_db, AsyncSessionLocal
 from backend.services.audit import log_action as audit_log_action
@@ -204,30 +204,35 @@ async def run_yearly_reset(
     Resets leave balances for the new year.
     - Casual/Sick Leave: Lapse and set to 12.0
     - Earned Leave: Carry forward 50% of current balance (Exact decimal).
-    - Idempotent: Runs only once per year.
+    Locked out if yearly reset has already run for the current year.
     """
-    
-    # 1. Determine Job Name (Manual_YearlyReset_YYYY_Timestamp)
     current_year = datetime.utcnow().year
-    
-    # For manual triggers, we force the run by making the job name unique.
-    # This allows re-running the logic if needed (e.g. after changing policy).
-    timestamp = int(datetime.utcnow().timestamp())
-    job_name = f"manual_yearly_reset_{current_year}_{timestamp}"
-    
-    # 2. Idempotency Check (Skipped implicitly by unique name, but kept for structure)
-    result = await db.execute(
+    yearly_scheduler_name = f"yearly_reset_{current_year}"
+    yearly_manual_prefix = f"manual_yearly_reset_{current_year}_"
+
+    # Lockout: only allow if yearly reset has not run for this year (scheduler or manual)
+    scheduler_run = await db.execute(
         select(JobLogModel).where(
-            and_(JobLogModel.job_name == job_name, JobLogModel.status == JobStatusEnum.SUCCESS)
+            and_(JobLogModel.job_name == yearly_scheduler_name, JobLogModel.status == JobStatusEnum.SUCCESS)
         )
     )
-    existing_job = result.scalar_one_or_none()
-    if existing_job:
-        return {
-            "message": f"Job {job_name} has already been executed successfully.",
-            "executed_at": existing_job.executed_at.isoformat() if existing_job.executed_at else None
-        }
-    # 3. Execution Logic
+    manual_run = await db.execute(
+        select(JobLogModel).where(
+            JobLogModel.job_name.like(f"{yearly_manual_prefix}%"),
+            JobLogModel.status == JobStatusEnum.SUCCESS,
+        ).limit(1)
+    )
+    if scheduler_run.scalar_one_or_none() or manual_run.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Yearly reset has already run for {current_year}. Use only when the automatic run (Jan 1) did not happen.",
+        )
+
+    timestamp = int(datetime.utcnow().timestamp())
+    job_name = f"manual_yearly_reset_{current_year}_{timestamp}"
+    executed_at = datetime.utcnow()
+
+    # Execution Logic
     executed_at = datetime.utcnow()
     
     try:

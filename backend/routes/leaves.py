@@ -563,13 +563,14 @@ async def action_leave(
             new_status=new_status_enum.value,
         )
 
-    # NOTIFICATION
+    # NOTIFICATION — send from manager's email (from DB), not MAIL_FROM
     applicant_result = await db.execute(select(UserModel).where(UserModel.id == applicant_id))
     applicant = applicant_result.scalar_one_or_none()
     if applicant and applicant.email:
+        manager_email = getattr(approver_model, "email", None) or getattr(approver, "email", None) or ""
         status_color = "#16a34a" if action == "APPROVE" else "#dc2626"
         action_text = "APPROVED" if action == "APPROVE" else "REJECTED"
-        
+
         email_body = f"""
         <html>
             <body>
@@ -594,17 +595,18 @@ async def action_leave(
             background_tasks.add_task(
                 send_email,
                 to_email=applicant.email,
-                subject=f"Leave Request {action_text}", 
+                subject=f"Leave Request {action_text}",
                 body=email_body,
-                subtype="html"
+                subtype="html",
+                from_email=manager_email,
             )
         else:
-            # Fallback for sync testing
             await send_email(
                 to_email=applicant.email,
-                subject=f"Leave Request {action_text}", 
+                subject=f"Leave Request {action_text}",
                 body=email_body,
-                subtype="html"
+                subtype="html",
+                from_email=manager_email,
             )
 
     new_status_str = new_status_enum.value if hasattr(new_status_enum, 'value') else str(new_status_enum)

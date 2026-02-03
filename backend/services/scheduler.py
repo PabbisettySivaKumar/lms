@@ -1,7 +1,7 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from backend.db import AsyncSessionLocal
-from backend.models import Policy, UserLeaveBalance, User as UserModel, LeaveTypeEnum
-from backend.models.enums import BalanceChangeTypeEnum
+from backend.models import Policy, UserLeaveBalance, User as UserModel, LeaveTypeEnum, JobLog
+from backend.models.enums import BalanceChangeTypeEnum, JobStatusEnum
 from backend.services.balance_history import record_balance_change
 from sqlalchemy import select, and_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
@@ -51,29 +51,41 @@ async def get_effective_policy(year: int, db: AsyncSession):
         "wfh_quota": 2
     }
 
+def _monthly_accrual_job_name(year: int, month: int) -> str:
+    """Canonical job name for monthly accrual (one per month)."""
+    return f"monthly_accrual_{year}_{month:02d}"
+
+
 async def monthly_accrual():
     """
     Adds 1/12th of Casual Leave Quota to all active employees.
-    Runs on the 1st of every month.
+    Runs on the 1st of every month. Idempotent: skips if already run this month.
     """
-    print(f"--- [Scheduler] Running Monthly Accrual: {datetime.datetime.now()} ---")
-    
+    now = datetime.datetime.now()
+    current_year, current_month = now.year, now.month
+    job_name = _monthly_accrual_job_name(current_year, current_month)
+    print(f"--- [Scheduler] Running Monthly Accrual: {now} ---")
+
     async with AsyncSessionLocal() as db:
-        current_year = datetime.datetime.now().year
+        # Idempotency: skip if already run this month
+        existing = await db.execute(
+            select(JobLog).where(
+                and_(JobLog.job_name == job_name, JobLog.status == JobStatusEnum.SUCCESS)
+            )
+        )
+        if existing.scalar_one_or_none():
+            print(f"[Scheduler] Monthly accrual already run for {current_year}-{current_month:02d}. Skipping.")
+            return None
+
         policy = await get_effective_policy(current_year, db)
-        
         casual_quota = policy.get("casual_leave_quota", 12)
         monthly_rate = round(casual_quota / 12, 2)
-        
         print(f"[Scheduler] Accruing {monthly_rate} CL (Quota: {casual_quota})")
-        
-        # Get all active users
+
         result = await db.execute(select(UserModel).where(UserModel.is_active == True))
         active_users = result.scalars().all()
-        
         updated_count = 0
         for user in active_users:
-            # Get or create casual leave balance
             balance_result = await db.execute(
                 select(UserLeaveBalance).where(
                     and_(
@@ -100,6 +112,11 @@ async def monthly_accrual():
             )
             updated_count += 1
 
+        db.add(JobLog(
+            job_name=job_name,
+            status=JobStatusEnum.SUCCESS,
+            details={"users_updated": updated_count, "monthly_rate": monthly_rate},
+        ))
         await db.commit()
         print(f"--- [Scheduler] Accrual Complete. Updated {updated_count} users. ---")
         return None
@@ -194,9 +211,18 @@ async def yearly_leave_reset():
         print(f"[Scheduler] Yearly Reset processed for {len(users)} users.")
     
     # 3. Trigger Monthly Accrual for the starting month (Jan) or current month (Manual Reset)
-    # This fixes the issue where CL is 0 because Accrual ran before Reset or hasn't run yet.
     print("[Scheduler] Triggering post-reset Monthly Accrual...")
     await monthly_accrual()
+
+    # 4. Record yearly reset in job_logs so manual trigger is locked out for this year
+    async with AsyncSessionLocal() as db_log:
+        job_name = f"yearly_reset_{current_year}"
+        db_log.add(JobLog(
+            job_name=job_name,
+            status=JobStatusEnum.SUCCESS,
+            details={"trigger": "scheduler", "year": current_year},
+        ))
+        await db_log.commit()
 
     print("--- [Scheduler] Yearly Reset Complete ---")
     return None

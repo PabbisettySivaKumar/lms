@@ -82,39 +82,28 @@ async def send_email_graph(
             print("Please set GRAPH_API_TOKEN or configure Azure App credentials")
             return False
         
-        # Get sender email
-        sender_email = from_email or os.getenv("MAIL_FROM", "")
+        # Use from_email when provided (e.g. manager from DB); else MAIL_FROM
+        sender_email = (from_email and from_email.strip()) or os.getenv("MAIL_FROM", "")
         if not sender_email:
             print("MAIL_FROM environment variable is not set")
             return False
         
-        # Prepare email message
-        content_type = "html" if subtype == "html" else "text"
-        
-        message = {
+        # Graph API expects contentType "Text" or "HTML" (PascalCase) and saveToSentItems
+        content_type = "HTML" if subtype == "html" else "Text"
+        payload = {
             "message": {
                 "subject": subject,
-                "body": {
-                    "contentType": content_type,
-                    "content": body
-                },
-                "toRecipients": [
-                    {
-                        "emailAddress": {
-                            "address": to_email
-                        }
-                    }
-                ]
-            }
+                "body": {"contentType": content_type, "content": body},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
+            },
+            "saveToSentItems": True,
         }
-        
-        # Send email via Graph API
+
         send_url = f"{GRAPH_API_ENDPOINT}/users/{sender_email}/sendMail"
-        
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 send_url,
-                json=message,
+                json=payload,
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json"
@@ -123,7 +112,7 @@ async def send_email_graph(
             )
             
             if response.status_code == 202:
-                print(f"Email sent successfully to {to_email} via Microsoft Graph API")
+                print(f"Email sent to {to_email} from {sender_email} via Microsoft Graph API")
                 return True
             else:
                 error_msg = response.text

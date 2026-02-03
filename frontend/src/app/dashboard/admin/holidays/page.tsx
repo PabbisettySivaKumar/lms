@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Calendar as CalendarIcon, Upload } from 'lucide-react';
+import { Plus, Trash2, Calendar as CalendarIcon, Upload, Play } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -38,15 +38,26 @@ export default function AdminHolidaysPage() {
     const [isAddOpen, setIsAddOpen] = useState(false);
     const [isImportOpen, setIsImportOpen] = useState(false);
 
-    // Access check
+    // Access check — admin, hr, founder, co_founder only (not visible to employees)
+    const canTriggerJobs = !!user && ['admin', 'hr', 'founder', 'co_founder'].includes(user.role ?? '');
     useEffect(() => {
         if (!isLoading && user) {
-            const allowed = ['admin', 'hr', 'founder'];
-            if (!allowed.includes(user.role)) {
+            const allowed = ['admin', 'hr', 'founder', 'co_founder'];
+            if (!allowed.includes(user.role ?? '')) {
                 router.push('/dashboard');
             }
         }
     }, [user, isLoading, router]);
+
+    // Job status: whether monthly accrual / yearly reset already ran (for button lockout)
+    const { data: jobStatus, refetch: refetchJobStatus } = useQuery({
+        queryKey: ['admin-job-status'],
+        queryFn: async () => {
+            const res = await api.get<{ monthly_accrual_run_this_month: boolean; yearly_reset_run_this_year: boolean }>('/admin/job-status');
+            return res.data;
+        },
+        enabled: canTriggerJobs,
+    });
 
     // Fetch Holidays
     const { data: holidays, isLoading: holidaysLoading, refetch: refetchHolidays } = useQuery({
@@ -101,15 +112,40 @@ export default function AdminHolidaysPage() {
     }
 
     const handleYearlyReset = async () => {
-        if (confirm('⚠️ WARNING: This will RESET all employee leave balances (CL=0, SL=Quota, EL=50% Carry). Are you sure?')) {
+        if (jobStatus?.yearly_reset_run_this_year) return;
+        if (confirm('Use this only when the automatic yearly reset (Jan 1) did not run.\n\n⚠️ This will RESET all employee leave balances (CL=0, SL=Quota, EL=50% Carry). Are you sure?')) {
             try {
                 await api.post('/admin/yearly-reset');
                 toast.success('Yearly leave reset completed successfully.');
+                queryClient.invalidateQueries({ queryKey: ['admin-job-status'] });
             } catch (error: any) {
-                toast.error(error.response?.data?.message || 'Failed to reset leaves.');
+                toast.error(error.response?.data?.detail || error.response?.data?.message || 'Failed to reset leaves.');
             }
         }
-    }
+    };
+
+    const triggerAccrualMutation = useMutation({
+        mutationFn: async () => {
+            await api.post('/admin/trigger-accrual');
+        },
+        onSuccess: () => {
+            toast.success('Monthly accrual triggered successfully. Casual leave has been added for all active users.');
+            queryClient.invalidateQueries({ queryKey: ['admin-job-status'] });
+        },
+        onError: (error: any) => {
+            toast.error(error.response?.data?.detail || 'Failed to trigger accrual.');
+        }
+    });
+
+    const handleTriggerAccrual = () => {
+        if (jobStatus?.monthly_accrual_run_this_month) return;
+        if (confirm('Add 1/12 of the casual leave quota to all active users now? (Normally runs automatically on the 1st of each month.)')) {
+            triggerAccrualMutation.mutate();
+        }
+    };
+
+    const monthlyAccrualLocked = jobStatus?.monthly_accrual_run_this_month === true;
+    const yearlyResetLocked = jobStatus?.yearly_reset_run_this_year === true;
 
     if (isLoading || holidaysLoading) return <div className="p-8">Loading holidays...</div>;
 
@@ -118,8 +154,27 @@ export default function AdminHolidaysPage() {
             <div className="flex items-center justify-between">
                 <h1 className="text-3xl font-bold tracking-tight">Holiday Planner</h1>
                 <div className="flex gap-2">
-                    <Button variant="destructive" onClick={handleYearlyReset}>
-                        ⚠️ Reset Leaves (Manual)
+                    {canTriggerJobs && (
+                        <Button
+                            variant="outline"
+                            onClick={handleTriggerAccrual}
+                            disabled={triggerAccrualMutation.isPending || monthlyAccrualLocked}
+                            title={monthlyAccrualLocked ? 'Monthly accrual has already run this month.' : 'Use only when the automatic run (1st of month) did not happen.'}
+                        >
+                            {triggerAccrualMutation.isPending ? 'Running…' : monthlyAccrualLocked ? (
+                                <>Run Monthly Accrual (already run)</>
+                            ) : (
+                                <><Play className="mr-2 h-4 w-4" /> Run Monthly Accrual</>
+                            )}
+                        </Button>
+                    )}
+                    <Button
+                        variant="destructive"
+                        onClick={handleYearlyReset}
+                        disabled={yearlyResetLocked}
+                        title={yearlyResetLocked ? 'Yearly reset has already run this year.' : 'Use only when the automatic yearly reset (Jan 1) did not run'}
+                    >
+                        ⚠️ Reset Manually (Yearly){yearlyResetLocked ? ' (already run)' : ''}
                     </Button>
                     <Button 
                         variant="outline" 

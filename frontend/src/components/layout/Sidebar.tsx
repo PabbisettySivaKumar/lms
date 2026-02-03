@@ -79,13 +79,13 @@ export default function Sidebar({ className }: SidebarProps) {
         },
     ];
 
-    // Manager / HR Links
+    // Team: manager+ see approvals & roster; employees see teammates (same manager)
     const managerLinks = [
         {
-            title: 'Team Approvals',
+            title: 'Team',
             href: '/dashboard/team',
             icon: CheckSquare,
-            roles: ['manager', 'hr', 'founder', 'admin']
+            roles: ['manager', 'hr', 'founder', 'co_founder', 'admin', 'employee', 'intern', 'contract']
         }
     ];
 
@@ -107,7 +107,7 @@ export default function Sidebar({ className }: SidebarProps) {
             title: 'Holiday Planner',
             href: '/dashboard/admin/holidays',
             icon: Calendar,
-            roles: ['admin', 'hr', 'founder']
+            roles: ['admin', 'hr', 'founder', 'co_founder']
         },
         {
             title: 'Leave Reports',
