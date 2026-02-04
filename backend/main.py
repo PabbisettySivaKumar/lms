@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load env vars
 load_dotenv()
@@ -39,11 +40,7 @@ async def lifespan(app: FastAPI):
     await close_db()  # Close database connections
     logger.info("Application shutdown")
 
-
-from fastapi.middleware.cors import CORSMiddleware
-
 app = FastAPI(title="Leave Management System", lifespan=lifespan)
-
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
