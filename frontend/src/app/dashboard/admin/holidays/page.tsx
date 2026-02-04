@@ -111,7 +111,7 @@ export default function AdminHolidaysPage() {
 
     const handleYearlyReset = async () => {
         if (jobStatus?.yearly_reset_run_this_year) return;
-        if (confirm('Use this only when the automatic yearly reset (Jan 1) did not run.\n\n⚠️ This will RESET all employee leave balances (CL=0, SL=Quota, EL=50% Carry). Are you sure?')) {
+        if (confirm('Use this only when the automatic yearly reset (Jan 1) did not run.\n\n⚠️ This will RESET all employee leave balances (CL=0, SL=Quota, EL=0). Are you sure?')) {
             try {
                 await api.post('/admin/yearly-reset');
                 toast.success('Yearly leave reset completed successfully.');

@@ -1,7 +1,8 @@
 import axios from 'axios';
+import { BACKEND_URL } from './config';
 
 const api = axios.create({
-    baseURL: process.env.NEXT_PUBLIC_API_URL || '/api', // Use Next.js proxy
+    baseURL: BACKEND_URL,
 });
 
 // Request Interceptor

@@ -7,6 +7,7 @@ import { format } from 'date-fns';
 import { toast } from 'sonner';
 
 import api from '@/lib/axios';
+import { BACKEND_URL } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -159,7 +160,7 @@ export default function EmployeePoliciesPage() {
                                     <CardFooter className="pt-4 border-t bg-slate-50/50 dark:bg-slate-900/20 flex flex-col gap-2">
                                         <Button className="w-full h-9 text-xs" variant="outline" asChild>
                                             <a
-                                                href={`/api${doc.url}`}
+                                                href={`${BACKEND_URL}${doc.url}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                             >

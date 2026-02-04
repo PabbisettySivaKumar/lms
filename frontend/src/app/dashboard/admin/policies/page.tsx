@@ -25,6 +25,7 @@ import {
     DialogDescription,
 } from '@/components/ui/dialog';
 import api from '@/lib/axios';
+import { BACKEND_URL } from '@/lib/config';
 import { useMutationWithToast } from '@/hooks/useMutationWithToast';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
@@ -506,7 +507,7 @@ export default function PoliciesPage() {
                                                             item.documents.map((doc, idx) => (
                                                                 <div key={doc.id || doc.url || idx} className="flex items-center justify-between group/doc">
                                                                     <a
-                                                                        href={`/api${doc.url}`}
+                                                                        href={`${BACKEND_URL}${doc.url}`}
                                                                         target="_blank"
                                                                         rel="noopener noreferrer"
                                                                         className="inline-flex items-center text-blue-600 hover:underline text-sm"

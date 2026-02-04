@@ -1,14 +1,20 @@
 import type { NextConfig } from "next";
 
+// Expose backend_url to the browser as NEXT_PUBLIC_BACKEND_URL (Next.js only injects NEXT_PUBLIC_* client-side)
+const backendUrl = process.env.backend_url || process.env.API_BACKEND_URL;
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_BACKEND_URL: process.env.backend_url || process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL,
+  },
   /* config options here */
   async rewrites() {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://127.0.0.1:8000/:path*',
+        destination: `${String(backendUrl).replace(/\/$/, '')}/:path*`,
       },
-    ]
+    ];
   },
   // Ensure error responses are properly forwarded
   async headers() {

@@ -25,9 +25,9 @@ A comprehensive web-based application for managing employee leaves, holidays, an
 *   **Leave Reports**: Export approved leave data to CSV for payroll processing and compliance. Includes date range filtering.
 *   **Holiday Import**: Bulk import holidays via CSV (supports various formats).
 *   **User Management**: create and manage employee accounts.
-*   **Yearly Leave Reset**: Automated job to reset casual/sick leaves and carry forward 50% earned leaves.
+*   **Yearly Leave Reset**: Automated job to reset casual/sick leaves and earned leaves to 0 (no carry-over).
     *   **Endpoint**: `POST /admin/yearly-reset`
-    *   **Logic**: CL/SL reset to 12.0. EL carries forward 50% (exact logic). Idempotent design.
+    *   **Logic**: CL=0, SL=policy quota, WFH=quota, EL=0. Idempotent design.
 
 ### 💻 UI/UX
 *   **Collapsible Sidebar**: Space-saving navigation with expand/collapse toggle.
@@ -81,9 +81,11 @@ npm run dev
 
 Frontend will start at `http://localhost:3000`.
 
+**Optional – Frontend env:** To override the API URL or proxy target, copy `frontend/.env.example` to `frontend/.env` and set `NEXT_PUBLIC_API_URL` and/or `API_BACKEND_URL` as needed. Defaults work for local development (Next.js proxies `/api` to the backend).
+
 ### 3. Environment Variables
 
-Create a `.env` file in the root directory:
+Create a `.env` file in the **root** directory (for the backend):
 
 ```env
 # Database

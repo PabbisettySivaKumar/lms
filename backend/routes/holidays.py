@@ -202,8 +202,8 @@ async def run_yearly_reset(
 ):
     """
     Resets leave balances for the new year.
-    - Casual/Sick Leave: Lapse and set to 12.0
-    - Earned Leave: Carry forward 50% of current balance (Exact decimal).
+    - Casual/Sick Leave: Lapse and set to policy quota (CL=0, SL=quota).
+    - Earned Leave: Reset to 0 (no carry-over).
     Locked out if yearly reset has already run for the current year.
     """
     current_year = datetime.utcnow().year

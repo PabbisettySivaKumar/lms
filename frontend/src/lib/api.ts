@@ -1,8 +1,9 @@
 import axios from 'axios';
+import { BACKEND_URL } from './config';
 
-// Create a configured axios instance
+// Create a configured axios instance (backend URL from .env NEXT_PUBLIC_API_URL)
 export const api = axios.create({
-    baseURL: '/api', // Proxied to backend via next.config.ts
+    baseURL: BACKEND_URL,
     headers: {
         'Content-Type': 'application/json',
     },

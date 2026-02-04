@@ -130,7 +130,7 @@ async def yearly_leave_reset():
     - CL: Reset to 0 (Lapses, new accrual starts).
     - SL: Reset to Policy Quota.
     - WFH: Reset to Policy Quota.
-    - EL: Carry forward 50% of current balance.
+    - EL: Reset to 0 (no carry-over).
     """
     logger.info("Running yearly reset at %s", datetime.datetime.now())
     
@@ -138,10 +138,10 @@ async def yearly_leave_reset():
         current_year = datetime.datetime.now().year
         policy = await get_effective_policy(current_year, db)
         
-        sick_quota = float(policy.get("sick_leave_quota", 5))
+        sick_quota = float(policy.get("sick_leave_quota", 3))
         wfh_quota = int(policy.get("wfh_quota", 2))
         
-        logger.info("Applying yearly reset: SL=%s, WFH=%s, CL=0, EL=50%% carry", sick_quota, wfh_quota)
+        logger.info("Applying yearly reset: SL=%s, WFH=%s, CL=0, EL=0", sick_quota, wfh_quota)
 
         # Get all users
         result = await db.execute(select(UserModel))
@@ -149,11 +149,12 @@ async def yearly_leave_reset():
         
         # Process each user's balances
         for user in users:
-            # Reset CL, SL, WFH
+            # Reset CL, SL, WFH, EL (no carry-over)
             for leave_type, balance_value in [
                 (LeaveTypeEnum.CASUAL, 0.0),
                 (LeaveTypeEnum.SICK, sick_quota),
-                (LeaveTypeEnum.WFH, wfh_quota)
+                (LeaveTypeEnum.WFH, wfh_quota),
+                (LeaveTypeEnum.EARNED, 0.0),
             ]:
                 balance_result = await db.execute(
                     select(UserLeaveBalance).where(
@@ -180,34 +181,6 @@ async def yearly_leave_reset():
                         BalanceChangeTypeEnum.YEARLY_RESET, reason="Yearly reset",
                         related_leave_id=None, changed_by=None,
                     )
-
-            # Handle Earned Leave (Carry forward 50%)
-            el_result = await db.execute(
-                select(UserLeaveBalance).where(
-                    and_(
-                        UserLeaveBalance.user_id == user.id,
-                        UserLeaveBalance.leave_type == LeaveTypeEnum.EARNED
-                    )
-                )
-            )
-            el_balance = el_result.scalar_one_or_none()
-            
-            if el_balance:
-                old_el = float(el_balance.balance)
-                new_el = old_el / 2.0
-                el_balance.balance = new_el
-                await record_balance_change(
-                    db, user.id, LeaveTypeEnum.EARNED, old_el, new_el,
-                    BalanceChangeTypeEnum.YEARLY_RESET, reason="Carry forward 50%",
-                    related_leave_id=None, changed_by=None,
-                )
-            else:
-                new_el_balance = UserLeaveBalance(
-                    user_id=user.id,
-                    leave_type=LeaveTypeEnum.EARNED,
-                    balance=0.0
-                )
-                db.add(new_el_balance)
 
         await db.commit()
         logger.info("Yearly reset processed for %s users", len(users))

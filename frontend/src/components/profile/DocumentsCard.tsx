@@ -6,8 +6,7 @@ import { Button } from '@/components/ui/button';
 import { FileIcon, Trash2, Upload, Loader2, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { BACKEND_URL } from '@/lib/config';
 
 export default function DocumentsCard() {
     const { user, refreshUser } = useAuth();
@@ -27,7 +26,7 @@ export default function DocumentsCard() {
 
         try {
             const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/users/me/documents`, {
+            const res = await fetch(`${BACKEND_URL}/users/me/documents`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -59,7 +58,7 @@ export default function DocumentsCard() {
         setIsDeleting(savedFilename);
         try {
             const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/users/me/documents/${savedFilename}`, {
+            const res = await fetch(`${BACKEND_URL}/users/me/documents/${savedFilename}`, {
                 method: 'DELETE',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -131,7 +130,7 @@ export default function DocumentsCard() {
                                 </div>
                                 <div className="flex items-center space-x-2 shrink-0">
                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-slate-900" asChild>
-                                        <a href={`${API_URL}${doc.url}`} target="_blank" rel="noopener noreferrer" download>
+                                        <a href={`${BACKEND_URL}${doc.url}`} target="_blank" rel="noopener noreferrer" download>
                                             <Download className="h-4 w-4" />
                                         </a>
                                     </Button>

@@ -11,8 +11,7 @@ import DocumentsCard from '@/components/profile/DocumentsCard';
 import { useState, useRef } from 'react';
 import { Camera, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { BACKEND_URL } from '@/lib/config';
 
 export default function ProfilePage() {
     const { user, isLoading, refreshUser } = useAuth();
@@ -40,7 +39,7 @@ export default function ProfilePage() {
             formData.append('file', file);
 
             const token = localStorage.getItem('access_token');
-            const res = await fetch(`${API_URL}/users/me/profile-picture`, {
+            const res = await fetch(`${BACKEND_URL}/users/me/profile-picture`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -106,7 +105,7 @@ export default function ProfilePage() {
                             <div className="relative group cursor-pointer" onClick={triggerFileInput}>
                                 <Avatar className="h-24 w-24 mb-4 ring-4 ring-slate-50 dark:ring-slate-800 transition-all group-hover:opacity-90">
                                     <AvatarImage
-                                        src={user.profile_picture_url ? `${API_URL}${user.profile_picture_url}` : ""}
+                                        src={user.profile_picture_url ? `${BACKEND_URL}${user.profile_picture_url}` : ""}
                                         className="object-cover"
                                     />
                                     <AvatarFallback className="text-2xl bg-indigo-100 text-indigo-700">
