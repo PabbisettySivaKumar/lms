@@ -46,10 +46,6 @@ export default function EmployeePoliciesPage() {
                 },
             });
             // Debug: Log the response to see if documents are included
-            console.log('Active policy response:', res.data);
-            if (res.data?.documents) {
-                console.log('Documents in active policy:', res.data.documents);
-            }
             return res.data;
         },
         staleTime: 0, // Always refetch to see latest documents

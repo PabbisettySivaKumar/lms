@@ -1,9 +1,11 @@
+import logging
 import os
 from typing import List, Optional
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from pydantic import EmailStr, BaseModel, SecretStr
 from backend.services.email_graph import send_email_graph
 # Check which email method to use
+logger = logging.getLogger(__name__)
 EMAIL_METHOD = os.getenv("EMAIL_METHOD", "smtp").lower()  # "smtp" or "graph"
 
 # Load config from env
@@ -34,19 +36,17 @@ async def send_email(
     if EMAIL_METHOD == "graph":
         try:
             result = await send_email_graph(to_email, subject, body, from_email=from_email, subtype=subtype)
-            if result and from_email:
-                print(f"Email sent to {to_email} from {from_email}")
-            elif result:
-                print(f"Email sent to {to_email}")
+            if result:
+                logger.info("Email sent to %s from %s", to_email, from_email or "default")
             return result
         except ImportError:
-            print("Graph not available, falling back to SMTP")
+            logger.warning("Graph not available, falling back to SMTP")
         except Exception as e:
-            print(f"Graph API failed: {e}")
+            logger.warning("Graph API failed: %s", e)
             if from_email:
-                print("Not falling back to SMTP (would use MAIL_FROM). Fix Graph config.")
+                logger.warning("Not falling back to SMTP (would use MAIL_FROM). Fix Graph config.")
                 raise
-            print("Falling back to SMTP")
+            logger.info("Falling back to SMTP")
 
     # SMTP (sender = MAIL_FROM)
     try:
@@ -60,17 +60,11 @@ async def send_email(
         fm = FastMail(conf)
         await fm.send_message(message)
         sender = from_email or os.getenv("MAIL_FROM", "noreply")
-        print(f"Email sent to {to_email} from {sender}")
+        logger.info("Email sent to %s from %s", to_email, sender)
     except Exception as e:
-        # Keep original error format but add helpful message for Office 365 auth issues
         error_msg = str(e)
-        print(f"Failed to send email: Exception raised {e}, check your credentials or email service configuration")
-        
-        # Provide helpful error messages for common Office 365 issues
+        logger.exception("Failed to send email to %s: %s", to_email, e)
         if "535" in error_msg or "Authentication unsuccessful" in error_msg:
-            print("Office 365 SMTP Authentication failed. Common solutions:")
-            print("1. Verify MAIL_USERNAME and MAIL_PASSWORD are correct")
-            print("2. If MFA is enabled, use an App Password instead of your regular password")
-            print("3. Enable 'SMTP AUTH' in Office 365 admin center (Exchange Admin Center > Mail flow > Settings)")
-            print("4. Ensure the account has permission to send emails via SMTP")
-            print("\n💡 Tip: Consider using Microsoft Graph API instead by setting EMAIL_METHOD=graph")
+            logger.warning(
+                "Office 365 SMTP auth failed. Verify MAIL_USERNAME/MAIL_PASSWORD, use App Password if MFA, enable SMTP AUTH. Consider EMAIL_METHOD=graph."
+            )

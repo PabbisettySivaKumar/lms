@@ -250,10 +250,8 @@ async def login(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        error_msg = f"Login error: {str(e)}"
-        print(error_msg)
-        print(traceback.format_exc())
+        import logging
+        logging.getLogger(__name__).exception("Login error: %s", e)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.patch("/first-login-reset")

@@ -72,11 +72,6 @@ export default function PoliciesPage() {
                         'Cache-Control': 'no-cache',
                     },
                 });
-                // Debug: Log the response to see if documents are included
-                console.log('Policies response:', response.data);
-                if (response.data && response.data.length > 0) {
-                    console.log('First policy documents:', response.data[0]?.documents);
-                }
                 return response.data;
             } catch (error: any) {
                 // If 401, the axios interceptor will handle logout

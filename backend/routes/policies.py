@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Response, Request
 import shutil
 import os
@@ -20,6 +21,7 @@ from backend.utils.id_utils import to_int_id
 from backend.services.audit import log_action as audit_log_action
 from backend.utils.action_log import log_user_action
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/policies", tags=["Policies"])
 
 # Helper to get current user with error handling (converts 401 to 403)
@@ -47,10 +49,7 @@ async def get_current_user_safe(email: str = Depends(get_current_user_email), db
             )
         raise
     except Exception as e:
-        # Catch any other errors and convert to 403
-        import traceback
-        print(f"Error in get_current_user_safe: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Error in get_current_user_safe: %s", e)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authentication failed"
@@ -118,10 +117,7 @@ async def verify_admin(current_user: User = Depends(get_current_user_safe), db: 
             )
         raise
     except Exception as e:
-        # Log unexpected errors and return 403 instead of 500 to avoid triggering logout
-        import traceback
-        print(f"Error in verify_admin: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Error in verify_admin: %s", e)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Authorization check failed: {str(e)}"
@@ -159,11 +155,7 @@ async def get_active_policy(response: Response, db: AsyncSession = Depends(get_d
             for doc in documents_list
         ]
         
-        # Debug: Log documents for this policy
-        print(f"Active Policy {policy.year}: Found {len(documents)} documents")
-        for doc in documents:
-            print(f"  - Document: {doc.name} ({doc.url})")
-        
+        logger.debug("Active policy year=%s: %s documents", policy.year, len(documents))
         # Set cache headers (shorter cache time to allow fresh data after uploads)
         response.headers["Cache-Control"] = "public, max-age=60, must-revalidate"
         return LeavePolicy(
@@ -224,11 +216,7 @@ async def get_all_policies(
             for doc in documents_list
         ]
         
-        # Debug: Log documents for this policy
-        print(f"Policy {p.year}: Found {len(documents)} documents")
-        for doc in documents:
-            print(f"  - Document: {doc.name} ({doc.url})")
-        
+        logger.debug("Policy year=%s: %s documents", p.year, len(documents))
         policies.append(LeavePolicy(
             id=p.id,
             year=p.year,
@@ -413,10 +401,8 @@ async def create_or_update_policy(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         error_detail = f"Failed to save policy: {str(e)}"
-        print(f"Error in create_or_update_policy: {error_detail}")
-        print(traceback.format_exc())
+        logger.exception("Error in create_or_update_policy: %s", e)
         await db.rollback()
         raise HTTPException(
             status_code=500,

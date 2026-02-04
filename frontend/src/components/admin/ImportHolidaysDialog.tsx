@@ -232,7 +232,6 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
         setIsUploading(true);
         try {
             const res = await api.post('/admin/holidays/bulk', parsedData);
-            console.log('Bulk import response:', res.data);
             if (res.data.success) {
                 toast.success(`Successfully imported ${res.data.count} holidays!`);
                 if (res.data.errors && res.data.errors.length > 0) {
@@ -250,8 +249,6 @@ export function ImportHolidaysDialog({ isOpen, onClose }: ImportHolidaysDialogPr
                     queryClient.refetchQueries({ queryKey: ['holidays'] }),
                     queryClient.refetchQueries({ queryKey: ['calendar-holidays'] })
                 ]);
-                
-                console.log('Queries invalidated and refetched');
                 
                 // Close dialog after a brief moment to allow UI to update
                 setTimeout(() => {

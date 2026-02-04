@@ -69,12 +69,10 @@ export default function AdminHolidaysPage() {
                         'Cache-Control': 'no-cache'
                     }
                 });
-                console.log('Fetched Holidays:', res.data, 'Count:', res.data?.length);
                 const mapped = res.data.map((h: any) => ({
                     ...h,
                     id: h.id // Backend returns integer ID
                 })) as Holiday[];
-                console.log('Mapped Holidays:', mapped);
                 return mapped;
             } catch (e) {
                 console.error('Error fetching holidays:', e);

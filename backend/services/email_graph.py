@@ -2,9 +2,12 @@
 Email service using Microsoft Graph API
 This is an alternative to SMTP that works better with Office 365 and MFA
 """
+import logging
 import os
 import httpx  # type: ignore
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Microsoft Graph API endpoint
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
@@ -49,7 +52,7 @@ async def get_access_token() -> Optional[str]:
                 data = response.json()
                 return data.get("access_token")
             else:
-                print(f"Failed to get access token: {response.status_code} - {response.text}")
+                logger.warning("Failed to get Graph access token: %s - %s", response.status_code, response.text[:200])
                 return None
     
     return None
@@ -78,14 +81,11 @@ async def send_email_graph(
         # Get access token
         access_token = await get_access_token()
         if not access_token:
-            print("Failed to get Microsoft Graph API access token")
-            print("Please set GRAPH_API_TOKEN or configure Azure App credentials")
+            logger.warning("No Graph API token; set GRAPH_API_TOKEN or configure Azure App credentials")
             return False
-        
-        # Use from_email when provided (e.g. manager from DB); else MAIL_FROM
         sender_email = (from_email and from_email.strip()) or os.getenv("MAIL_FROM", "")
         if not sender_email:
-            print("MAIL_FROM environment variable is not set")
+            logger.warning("MAIL_FROM not set")
             return False
         
         # Graph API expects contentType "Text" or "HTML" (PascalCase) and saveToSentItems
@@ -112,24 +112,17 @@ async def send_email_graph(
             )
             
             if response.status_code == 202:
-                print(f"Email sent to {to_email} from {sender_email} via Microsoft Graph API")
+                logger.info("Email sent to %s from %s via Graph API", to_email, sender_email)
                 return True
-            else:
-                error_msg = response.text
-                print(f"Failed to send email via Graph API: {response.status_code} - {error_msg}")
-                
-                # Provide helpful error messages
-                if response.status_code == 401:
-                    print("Authentication failed. Check your access token or Azure App credentials")
-                elif response.status_code == 403:
-                    print("Permission denied. Ensure the app has 'Mail.Send' permission")
-                elif response.status_code == 404:
-                    print(f"User '{sender_email}' not found or doesn't have a mailbox")
-                
-                return False
-                
+            error_msg = response.text
+            logger.warning("Graph API send failed: %s - %s", response.status_code, error_msg[:200])
+            if response.status_code == 401:
+                logger.warning("Graph auth failed; check access token or Azure App credentials")
+            elif response.status_code == 403:
+                logger.warning("Graph permission denied; ensure app has Mail.Send")
+            elif response.status_code == 404:
+                logger.warning("Sender '%s' not found or no mailbox", sender_email)
+            return False
     except Exception as e:
-        print(f"Error sending email via Graph API: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error sending email via Graph API: %s", e)
         return False

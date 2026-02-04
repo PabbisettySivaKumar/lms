@@ -1,3 +1,5 @@
+import logging
+import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from backend.db import AsyncSessionLocal
 from backend.models import Policy, UserLeaveBalance, User as UserModel, LeaveTypeEnum, JobLog
@@ -5,8 +7,8 @@ from backend.models.enums import BalanceChangeTypeEnum, JobStatusEnum
 from backend.services.balance_history import record_balance_change
 from sqlalchemy import select, and_  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # type: ignore
-import datetime
 
+logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 async def get_effective_policy(year: int, db: AsyncSession):
@@ -19,7 +21,7 @@ async def get_effective_policy(year: int, db: AsyncSession):
     result = await db.execute(select(Policy).where(Policy.year == year))
     policy = result.scalar_one_or_none()
     if policy:
-        print(f"[Policy] Using defined policy for {year}")
+        logger.debug("Using defined policy for year=%s", year)
         return {
             "casual_leave_quota": policy.casual_leave_quota,
             "sick_leave_quota": policy.sick_leave_quota,
@@ -36,7 +38,7 @@ async def get_effective_policy(year: int, db: AsyncSession):
     )
     fallback = result.scalar_one_or_none()
     if fallback:
-        print(f"[Policy] No policy for {year}. Continuing with {fallback.year} policy.")
+        logger.debug("No policy for year=%s, using fallback year=%s", year, fallback.year)
         return {
             "casual_leave_quota": fallback.casual_leave_quota,
             "sick_leave_quota": fallback.sick_leave_quota,
@@ -44,7 +46,7 @@ async def get_effective_policy(year: int, db: AsyncSession):
         }
         
     # 3. Hard Default
-    print(f"[Policy] No policies found. Using system defaults.")
+    logger.debug("No policies found, using system defaults")
     return {
         "casual_leave_quota": 12,
         "sick_leave_quota": 5,
@@ -64,7 +66,7 @@ async def monthly_accrual():
     now = datetime.datetime.now()
     current_year, current_month = now.year, now.month
     job_name = _monthly_accrual_job_name(current_year, current_month)
-    print(f"--- [Scheduler] Running Monthly Accrual: {now} ---")
+    logger.info("Running monthly accrual at %s", now)
 
     async with AsyncSessionLocal() as db:
         # Idempotency: skip if already run this month
@@ -74,13 +76,13 @@ async def monthly_accrual():
             )
         )
         if existing.scalar_one_or_none():
-            print(f"[Scheduler] Monthly accrual already run for {current_year}-{current_month:02d}. Skipping.")
+            logger.info("Monthly accrual already run for %s-%02d, skipping", current_year, current_month)
             return None
 
         policy = await get_effective_policy(current_year, db)
         casual_quota = policy.get("casual_leave_quota", 12)
         monthly_rate = round(casual_quota / 12, 2)
-        print(f"[Scheduler] Accruing {monthly_rate} CL (Quota: {casual_quota})")
+        logger.info("Accruing %s CL (quota: %s)", monthly_rate, casual_quota)
 
         result = await db.execute(select(UserModel).where(UserModel.is_active == True))
         active_users = result.scalars().all()
@@ -118,7 +120,7 @@ async def monthly_accrual():
             details={"users_updated": updated_count, "monthly_rate": monthly_rate},
         ))
         await db.commit()
-        print(f"--- [Scheduler] Accrual Complete. Updated {updated_count} users. ---")
+        logger.info("Monthly accrual complete, updated %s users", updated_count)
         return None
 
 async def yearly_leave_reset():
@@ -130,7 +132,7 @@ async def yearly_leave_reset():
     - WFH: Reset to Policy Quota.
     - EL: Carry forward 50% of current balance.
     """
-    print(f"--- [Scheduler] Running Yearly Reset: {datetime.datetime.now()} ---")
+    logger.info("Running yearly reset at %s", datetime.datetime.now())
     
     async with AsyncSessionLocal() as db:
         current_year = datetime.datetime.now().year
@@ -139,7 +141,7 @@ async def yearly_leave_reset():
         sick_quota = float(policy.get("sick_leave_quota", 5))
         wfh_quota = int(policy.get("wfh_quota", 2))
         
-        print(f"[Scheduler] Applying Yearly Reset. SL={sick_quota}, WFH={wfh_quota}, CL=Reset(0), EL=50% Carry")
+        logger.info("Applying yearly reset: SL=%s, WFH=%s, CL=0, EL=50%% carry", sick_quota, wfh_quota)
 
         # Get all users
         result = await db.execute(select(UserModel))
@@ -208,10 +210,10 @@ async def yearly_leave_reset():
                 db.add(new_el_balance)
 
         await db.commit()
-        print(f"[Scheduler] Yearly Reset processed for {len(users)} users.")
+        logger.info("Yearly reset processed for %s users", len(users))
     
     # 3. Trigger Monthly Accrual for the starting month (Jan) or current month (Manual Reset)
-    print("[Scheduler] Triggering post-reset Monthly Accrual...")
+    logger.info("Triggering post-reset monthly accrual")
     await monthly_accrual()
 
     # 4. Record yearly reset in job_logs so manual trigger is locked out for this year
@@ -224,7 +226,7 @@ async def yearly_leave_reset():
         ))
         await db_log.commit()
 
-    print("--- [Scheduler] Yearly Reset Complete ---")
+    logger.info("Yearly reset complete")
     return None
 
 def start_scheduler():
@@ -236,8 +238,8 @@ def start_scheduler():
     
     if not scheduler.running:
         scheduler.start()
-        print("--- [Scheduler] Started ---")
+        logger.info("Scheduler started")
 
 def shutdown_scheduler():
     scheduler.shutdown()
-    print("--- [Scheduler] Shutdown ---")
+    logger.info("Scheduler shutdown")

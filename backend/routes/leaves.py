@@ -1,3 +1,4 @@
+import logging
 import os
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
 from datetime import date, timedelta
@@ -36,6 +37,7 @@ import csv
 import io
 from fastapi.responses import StreamingResponse
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/leaves", tags=["Leaves"])
 
 async def get_current_user(email: str = Depends(get_current_user_email), db: AsyncSession = Depends(get_db)):
@@ -163,9 +165,7 @@ async def apply_leave(
             )
         except Exception as db_error:
             await db.rollback()
-            import traceback
-            print(f"Database error in apply_leave: {str(db_error)}")
-            print(traceback.format_exc())
+            logger.exception("Database error in apply_leave: %s", db_error)
             raise HTTPException(
                 status_code=500,
                 detail=f"Database error: {str(db_error)}"
@@ -234,11 +234,7 @@ async def apply_leave(
         # Re-raise HTTPExceptions as-is (they already have proper status codes and details)
         raise
     except Exception as e:
-        # Log unexpected errors for debugging
-        import traceback
-        print(f"Error in apply_leave: {str(e)}")
-        print(traceback.format_exc())
-        # Return a proper error response
+        logger.exception("Error in apply_leave: %s", e)
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"

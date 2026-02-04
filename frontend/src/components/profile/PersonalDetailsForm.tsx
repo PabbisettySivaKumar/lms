@@ -108,9 +108,7 @@ export default function PersonalDetailsForm() {
                 }
             });
             
-            console.log('Sending profile update payload:', payload);
             const response = await api.patch('/users/me', payload);
-            console.log('Profile update response:', response.data);
             toast.success('Profile updated successfully');
             await fetchUser();
             setIsEditing(false); // Exit edit mode

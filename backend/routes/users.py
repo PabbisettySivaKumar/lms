@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, HTTPException, Depends, status, Security, Request
 from typing import List, Optional
 from datetime import datetime
@@ -22,10 +23,10 @@ from pathlib import Path
 import os
 import json
 from sqlalchemy import desc  # type: ignore
-from backend.utils.id_utils import to_int_id
 from backend.models.user import UserBalanceUpdate
 from backend.services.scheduler import monthly_accrual
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="", tags=["Users"])
 
 async def user_model_to_pydantic(user: UserModel, db: AsyncSession) -> UserSchema:
@@ -235,9 +236,7 @@ async def update_user_me(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        print(f"Error in update_user_me: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Error in update_user_me: %s", e)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update profile: {str(e)}"
@@ -354,8 +353,7 @@ async def create_user_admin(
             
             raise HTTPException(status_code=400, detail=error_msg)
         manager_id_db = manager.id
-        # Debug logging
-        print(f"DEBUG: Setting manager_id_db = {manager_id_db} for manager employee_id = {manager_employee_id_clean}")
+        logger.debug("Setting manager_id_db=%s for manager employee_id=%s", manager_id_db, manager_employee_id_clean)
     
     # Password Handling
     if len(user_in.password) < 6:
@@ -380,8 +378,7 @@ async def create_user_admin(
     initial_cl = casual_quota / 12.0
 
     # Step 1: Create user
-    # Debug logging
-    print(f"DEBUG: Creating user with manager_id = {manager_id_db}, manager_employee_id from request = {user_in.manager_employee_id}")
+    logger.debug("Creating user with manager_id=%s, manager_employee_id=%s", manager_id_db, user_in.manager_employee_id)
     new_user = UserModel(
         employee_id=user_in.employee_id,
         full_name=user_in.full_name,
